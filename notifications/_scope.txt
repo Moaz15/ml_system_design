@@ -1,0 +1,28 @@
+NOTIFICATIONS AND MESSAGING
+===========================
+
+WHAT BELONGS HERE
+-----------------
+Push, email and in-app messaging: who to send to, what to send, when to
+send, how often, and when to stay silent.
+
+THE SKILL THIS FOLDER DRILLS
+----------------------------
+The decision is send or do not send, so the right target is INCREMENTAL
+effect, not predicted click. A user who would have opened the app anyway
+generates a click that the model takes credit for and learns from. This is
+the cleanest uplift-modelling domain in the interview set.
+
+  - propensity vs uplift: p(open | send) is the wrong objective
+  - the long-term cost that never shows up in the open rate: fatigue,
+    notification disable, uninstall - a permanent loss driven by a
+    short-term metric
+  - send-time optimisation and per-user frequency caps as constraints
+  - global holdout as the only honest measurement of the whole channel
+  - heavy-tailed users and cannibalisation across campaigns
+
+CANDIDATE CASES
+---------------
+  01  Daily push for a content app: who gets it, when, and what.
+  02  Optimising for 30-day retention rather than open rate.
+  03  Frequency capping and a fatigue model with no direct fatigue label.

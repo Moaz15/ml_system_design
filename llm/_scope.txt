@@ -1,0 +1,32 @@
+LLM SYSTEMS
+===========
+
+WHAT BELONGS HERE
+-----------------
+Retrieval-augmented generation, assistants and copilots, agents and tool
+use, summarisation and extraction pipelines, LLM-as-judge evaluation,
+classification with an LLM, prompt and model routing.
+
+THE SKILL THIS FOLDER DRILLS
+----------------------------
+There is no single correct output, so the evaluation harness is the design
+problem. Anyone can call an API; the engineering is in measuring quality,
+bounding cost and latency, and containing failure.
+
+  - eval first: a golden set, rubrics, LLM-as-judge with human calibration,
+    regression suites per release; without it you cannot ship a change
+  - RAG is a retrieval problem wearing a generation costume - chunking,
+    embedding choice, hybrid retrieval, reranking, context budget
+  - grounding and citation as the hallucination control
+  - latency and cost per request as first-class design constraints;
+    streaming, caching, model routing, small model plus escalation
+  - guardrails: prompt injection, PII, jailbreaks, refusal behaviour
+  - when a fine-tuned small model or a classifier beats prompting
+  - drift when the underlying model version changes beneath you
+
+CANDIDATE CASES
+---------------
+  01  A support assistant over an internal knowledge base.
+  02  Designing the eval suite before designing the system.
+  03  LLM-assisted metadata extraction across a large content catalog.
+  04  Cost and latency: routing between a small and a large model.

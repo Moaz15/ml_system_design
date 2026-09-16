@@ -1,0 +1,29 @@
+SPEECH AND AUDIO
+================
+
+WHAT BELONGS HERE
+-----------------
+ASR and transcription, speaker diarisation, audio content understanding,
+chaptering and highlight detection, TTS and voice cloning, music and
+speech tagging, audio quality and moderation.
+
+THE SKILL THIS FOLDER DRILLS
+----------------------------
+Long, unstructured, expensive-to-label inputs. A single hour of audio can
+cost more to annotate than a thousand rows of tabular data, so label
+efficiency and pretrained transfer are the core of the design.
+
+  - segmentation before modelling: an hour of audio is not one example
+  - WER and its failure to reflect what users actually notice
+  - code-mixed and low-resource languages with almost no labelled data
+  - pretrained audio encoders and when fine-tuning is worth it
+  - batch versus streaming inference, and the very different budgets
+  - GPU cost per hour processed as the binding constraint
+  - metadata generated from audio feeding the recommendation system, so
+    errors propagate across folder boundaries
+
+CANDIDATE CASES
+---------------
+  01  Auto-chaptering long-form audio episodes.
+  02  Transcription pipeline for a code-mixed multilingual catalog.
+  03  Audio quality scoring at ingest to gate publication.

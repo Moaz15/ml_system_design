@@ -1,0 +1,31 @@
+FRAUD AND ABUSE
+===============
+
+WHAT BELONGS HERE
+-----------------
+Payment fraud, account takeover, fake accounts and bots, promo and refund
+abuse, spam, listing scams, engagement farming.
+
+THE SKILL THIS FOLDER DRILLS
+----------------------------
+An adversary that reacts to your model. The data distribution is not
+drifting by accident - it is being moved by someone who profits from your
+false negatives. This changes retraining from hygiene into a security
+property.
+
+  - extreme class imbalance, often under 0.1% positives
+  - labels arrive late (chargebacks at 60-90 days) and are incomplete:
+    you never learn about the fraud you blocked, only what you let through
+  - asymmetric costs - a blocked good customer is not a free mistake
+  - threshold setting as an economic decision, not an F1 optimisation
+  - rules engine plus model, and why the rules never go away
+  - graph and velocity features; adversaries evade features, not models
+  - feedback loop: the blocked population is censored from training data
+
+CANDIDATE CASES
+---------------
+  01  Payment fraud detection for a subscription product.
+  02  Fake account and bot detection at signup, with near-zero friction
+      tolerance for real users.
+  03  Promo abuse on a new referral campaign, with no historical labels.
+  04  Engagement farming on creator payouts.

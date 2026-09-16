@@ -1,0 +1,1060 @@
+CASE 01: Listening Hours for Capacity Planning
+==============================================
+CONTEXT
+-----------
+You are at a subscription audio-content app operating in India. Long-form
+spoken content: audiobooks, serialised fiction, self-help, and regional
+language originals. Around 150,000 episodes in the catalog, with 40 to 60
+new episodes published every week.
+
+SCALE (last month)
+
+  - 8.0M monthly active users
+  - 1.2M daily active users on a weekday, about 1.55M on a weekend
+  - 45 minutes listened per daily active user on average
+  - about 900,000 listening hours per day, about 27M per month
+  - streamed on an adaptive ladder averaging roughly 96 kbps, which works
+    out to about 1,150 TB of CDN egress per month
+  - peak concurrency (people listening at the same moment) around
+    140,000, between 20:30 and 22:30 IST
+  - peak egress around 13 Gbps
+  - three years of daily history at user, session and episode grain
+
+
+THE FOUR DECISIONS THIS FORECAST DRIVES
+
+  1. CDN COMMITMENT
+     A monthly committed egress volume, declared 30 days ahead and locked
+     for the month. Committed rate Rs 1.60/GB. Overage is billed at 2.2x,
+     so Rs 3.52/GB. Unused commitment is not refunded and does not roll
+     over. The line runs about Rs 18.4 lakh a month, Rs 2.2 crore a year.
+
+     Over the last twelve months: overage was charged in four months,
+     totalling Rs 21 lakh. In the other eight months, unused commitment
+     wasted about Rs 14 lakh.
+
+  2. PEAK STREAMING CAPACITY
+     The servers that stream the audio add themselves automatically as
+     more people listen at once - but only up to a ceiling. The machines
+     are booked from the cloud vendor a month in advance to get a
+     discount, and that booking IS the ceiling: the system cannot scale
+     past machines we did not book. The booked pool costs about Rs 45
+     lakh a year, and the ceiling is set once a month.
+
+     If listeners go past the ceiling, we can add unbooked machines at
+     about 3x the price - but they take about 20 minutes to start up and
+     begin serving. For those 20 minutes there is nothing to serve the
+     extra listeners with, so playback fails for some of them.
+
+     That is what happened on 12 October last year. The number of people
+     listening at the same moment stayed above the ceiling for 90
+     minutes. Playback failures went from a normal 0.2% of attempts to
+     3.4%. About 80,000 people hit at least one failure, and a week
+     later that group was about 4 percentage points less likely to still
+     be using the app than a comparable group who listened normally that
+     same evening.
+
+     So: ceiling booked and not used is wasted at the reserved rate, and
+     ceiling booked too low means failed playback for at least the 20
+     minutes it takes to add machines.
+
+  3. TRANSCODE AND INGEST
+     A reserved GPU pool for ingest, transcode and the bitrate ladder,
+     booked quarterly, about Rs 60 lakh a year. Spot capacity exists but
+     is not guaranteed during peak hours.
+
+  4. THE CONTENT RELEASE CALENDAR
+     The programming team slots its biggest originals into the weeks it
+     expects the most listening, and wants 90 days of notice to move a
+     release date.
+
+
+WHAT EXISTS TODAY
+
+  A spreadsheet. Last month's total, multiplied by a growth factor that
+  finance picks each quarter, plus a flat 15% "for safety" on anything
+  capacity related. One number per month. No range, no interval, no
+  stated assumptions. The same single number feeds all four decisions.
+
+
+WHAT THE DATA ACTUALLY LOOKS LIKE
+
+  HOW THE NUMBERS REACH US
+
+  - The app sends an event every time something happens in a listening
+    session - play, pause, seek, finish. Those events flow continuously
+    into the data warehouse, which files them one calendar day at a
+    time. Each day's file is called a partition.
+  - Phones go offline. When that happens the app holds its events and
+    sends them once the connection is back, so events belonging to a
+    date keep arriving after that date has ended. About 2% arrive late,
+    most of them within 6 hours.
+  - Because of that, a day's totals keep being corrected for about 48
+    hours after the day ends. The number you read this morning for
+    yesterday is not the number it will settle at.
+  - CDN egress - the bytes actually shipped out to listeners' phones -
+    is tracked separately, daily, by the CDN vendor in their own logs.
+    That is the number the invoice is computed from, so that is the
+    number that costs money.
+
+  THE SHAPE OF THE SERIES
+
+  - Strong weekly cycle. Weekends are materially higher than midweek.
+  - Spikes around major festivals and long weekends, and a sustained
+    lift through the monsoon months.
+  - Diwali last year ran about 35% above the surrounding weeks, for
+    about ten days. Diwali falls on a different date each year, and it
+    appears only three times in the whole history.
+
+  ONE-OFF EVENTS SITTING IN THE HISTORY
+
+  - 14 March last year: the origin servers were down for 11 hours. The
+    origin is the master copy of the audio that the CDN pulls from when
+    it does not already have a file cached, so with the origin down a
+    large share of playback simply failed. That day's listening came in
+    around 60% of a normal Thursday.
+  - August last year: a hit original launched - an original being a show
+    we produce ourselves rather than license. Listening across the whole
+    platform, not just on that show, ran about 12% above where the
+    growth line would have put it, for roughly three weeks. It then
+    settled at about 4% above.
+
+  CHANGES MADE UNDERNEATH THE SERIES
+
+  - 19 months ago the warehouse changed what counts as a "listening
+    hour": sessions shorter than 30 seconds stopped being counted, where
+    a session is one continuous stretch of listening. Nobody measured
+    what that did to the numbers, so the history before that date and
+    the history after it may not be measuring the same thing.
+  - 8 months ago a higher-quality 160 kbps tier was added for premium
+    subscribers. Bitrate is how much data one second of audio uses, so a
+    higher tier ships more bytes for the same minute listened. Average
+    bytes per listening hour has been drifting up ever since.
+
+  WHAT DRIVES GROWTH
+
+  - New users come mostly from paid marketing. The marketing calendar is
+    planned a quarter ahead, but planned spend and actual spend do not
+    always match - campaigns get moved, cut or topped up mid-quarter.
+
+
+WHY THIS IS ON YOUR DESK NOW
+
+Finance has asked why CDN overage was charged in four of the last twelve
+months. Infrastructure has asked why they paid for committed capacity
+they did not use in the other eight. The 12 October incident added a
+reliability angle that neither of them had raised before.
+
+The CFO wants a committed volume number for next quarter in three weeks.
+
+
+#######################################################################
+YOUR ROLE
+#######################################################################
+
+You are a senior ML engineer on the platform data team. You own this end
+to end: the data, the model, the service that publishes the number, and
+the number that infrastructure, finance and programming actually plan
+against. There is one of you and one data engineer, for a quarter.
+
+
+#######################################################################
+QUESTION
+#######################################################################
+
+Design the forecasting system. How do you frame the problem, what do you
+build, how do you know it is any good, how does it ship and get
+monitored, and what do you have ready in three weeks?
+
+
+
+
+#######################################################################
+PART A - THE GENERAL PLAYBOOK (use this for EVERY forecasting case)
+#######################################################################
+
+Every forecasting design is the same eight questions in the same order.
+As with RCA, the discipline is in the ORDER. The classic failure is
+reaching question 6 - which model - before answering question 1, and
+then building an excellent forecast of a quantity nobody decides on.
+
+   1. WHAT DECISION?   What action changes because of this number?
+   2. WHAT TARGET?     Exact quantity, grain, horizon, point or range.
+   3. WHAT SCORE?      A loss that matches the decision's cost, and a
+                       baseline you are required to beat.
+   4. WHAT SHAPE?      Refresh cadence, hierarchy, direct vs recursive.
+   5. WHAT INPUT?      Only features knowable at forecast time.
+   6. WHAT MODEL?      Climb the ladder. Stop as soon as you are winning.
+   7. HOW SHIP?        Rolling-origin backtest, service, human override.
+   8. HOW ROT?         Calendar rot, definition drift, self-suppression.
+
+Compressed:  Decision? -> Target? -> Score? -> Shape? -> Input? ->
+             Model? -> Ship? -> Rot?
+
+
+THE FIVE LAWS (these are not negotiable, and they are where most
+candidates lose the round)
+
+  L1. NO RANDOM SPLITS. Ever. A random train/test split on a time series
+      trains on the future and reports a score you can never reproduce
+      in production.
+
+  L2. BEAT SEASONAL NAIVE OR DO NOT SHIP. y_t = y_{t-7} is free, has no
+      dependencies and cannot break. Any model that does not beat it by
+      a margin worth its maintenance cost is a liability.
+
+  L3. IF THE COST IS ASYMMETRIC, THE ANSWER IS A QUANTILE, NOT A MEAN.
+      Almost every real capacity, inventory or staffing decision is
+      asymmetric. The mean is the right answer only when the two error
+      directions cost the same, which is almost never.
+
+  L4. EVERY FEATURE MUST BE KNOWABLE AT FORECAST TIME, FOR THE WHOLE
+      HORIZON. A feature you will not have on the day you forecast is
+      leakage, no matter how predictive it looks in the backtest.
+
+  L5. BACKTEST THE WAY YOU WILL FORECAST. Same origin spacing, same
+      horizon, same information cutoff as production. Anything else
+      measures a system you are not going to run.
+
+
+STEP 1 - WHAT DECISION?
+-----------------------
+A forecast is never the product. The decision is the product. Get, for
+each consumer of the number:
+
+  - the action they take (commit, provision, hire, schedule, order)
+  - the lead time, which fixes the horizon - not your preference
+  - the cadence, which fixes how often you refresh
+  - the cost of being too low, and the cost of being too high, in money
+
+If two consumers have different lead times or different cost shapes, you
+have two forecasting products, however much they share a pipeline.
+
+If no action changes, do not build it. A dashboard is not a decision.
+
+
+STEP 2 - WHAT TARGET?
+---------------------
+Pin down four things and say them out loud:
+
+  - THE EXACT QUANTITY. Prefer the quantity the decision is denominated
+    in. If the invoice is in bytes, forecast bytes, not a proxy that
+    converts to bytes through a ratio that can drift.
+  - GRAIN. Daily, weekly, monthly. Forecast at the grain with the most
+    structure and aggregate upward. Monthly models over three years of
+    history have 36 observations, which is not a dataset.
+  - HORIZON. From the lead time, not from habit. The horizon decides
+    whether lag features are usable at all.
+  - POINT OR DISTRIBUTION. See L3.
+
+Then consider DECOMPOSING the target into factors with different drivers:
+
+      quantity = volume x intensity
+
+  Each factor gets its own model, and the product is the forecast. This
+  is worth doing whenever one factor carries the seasonality and the
+  other carries a slow structural trend, because it localises error and
+  it survives product changes that only move one factor.
+
+
+STEP 3 - WHAT SCORE?
+--------------------
+Three tiers, and say all three:
+
+  - POINT ACCURACY: MASE by preference - it is scale free and it is
+    literally "how many times better than seasonal naive am I", which
+    is the question. Avoid MAPE: it is asymmetric, it punishes
+    over-forecast less than under-forecast, and it explodes near zero.
+  - DISTRIBUTIONAL: pinball loss at the quantiles you actually use, plus
+    coverage calibration - does the P90 contain the truth 90% of the
+    time, measured over the backtest.
+  - DECISION COST: simulate the real decision over the backtest and
+    price it in money. "This saves Rs X a year against the spreadsheet"
+    is the number to present. It is the only metric the business can
+    argue with, and it is the only one that can tell you when a more
+    accurate model is not worth shipping.
+
+Always report the baseline's decision cost alongside yours.
+
+
+STEP 4 - WHAT SHAPE?
+--------------------
+  - Batch, almost always. Forecasting is rarely a latency problem.
+  - Refresh cadence matched to the decision, plus a daily refresh for
+    monitoring even when the decision is monthly.
+  - DIRECT vs RECURSIVE multi-step. Recursive feeds its own predictions
+    back as lags and compounds error; it is fine for short horizons and
+    bad for long ones. Direct trains a separate model per horizon (or
+    one model with horizon as a feature) and is the safer default past
+    about two seasonal cycles.
+  - HIERARCHY. If the number is consumed at several levels, the levels
+    must reconcile. Decide bottom-up, top-down or an optimal
+    reconciliation, and say why.
+  - VINTAGING. Store every forecast with the origin date it was made
+    from. You cannot evaluate, debug or defend what you did not store.
+
+
+STEP 5 - WHAT INPUT?
+--------------------
+Split features by whether the future value is KNOWN:
+
+  - KNOWN FUTURE (safe at any horizon): calendar, day of week, holiday
+    and festival tables, planned promotions, published schedules,
+    contracted events.
+  - OBSERVED PAST ONLY (safe only at short horizons): lags, rolling
+    statistics, recent levels.
+  - PLANNED BUT UNCERTAIN: budgets, launch plans. Usable, but measure
+    historically how far plan drifts from actual before trusting it.
+
+Time-series leakage is specific and easy to commit: any feature computed
+from data that would not have existed at the origin. Recomputing a
+rolling mean over the full series before splitting is the classic.
+
+Holiday and festival features need LEAD AND LAG WINDOWS, not a single
+day flag, because behaviour ramps before and decays after.
+
+
+STEP 6 - WHAT MODEL?
+--------------------
+Climb, and stop as soon as you are winning by enough to justify the
+maintenance:
+
+      0. naive                          reference only
+      1. seasonal naive                 the baseline you must beat
+      2. seasonal naive + drift, or STL decomposition + drift
+      3. ETS / Theta                    strong, cheap, surprisingly hard
+                                        to beat on clean seasonal data
+      4. SARIMAX or Prophet             when exogenous regressors matter
+      5. GBDT on calendar + exogenous   quantiles come free via pinball
+         (+ lags at short horizons)     loss; the usual practical winner
+      6. global deep models             DeepAR, TFT, N-BEATS
+
+Level 6 needs either many related series or a very long history. A
+single series with a thousand daily observations does not have the data
+to justify it, and saying so plainly is a strength, not a gap.
+
+State for each candidate: training cost, inference cost, how it handles
+the seasonality you actually have, how it degrades, and who debugs it at
+3am.
+
+
+STEP 7 - HOW SHIP?
+------------------
+  - ROLLING-ORIGIN BACKTEST with origins spaced to match the real
+    decision cadence, and the full horizon evaluated at each origin.
+  - Compare against the incumbent - including the human spreadsheet,
+    which is a model and should be scored like one.
+  - Human sign-off on high-stakes irreversible commitments. Log every
+    override; overrides are labelled data about what the model misses.
+  - A fallback that always returns a number. A capacity system cannot
+    accept a null.
+
+STEP 8 - HOW ROT?
+-----------------
+  - CALENDAR ROT: moving festivals need a maintained table. If nobody
+    owns it, the model silently breaks the same month every year.
+  - DEFINITION DRIFT: someone changes what the metric counts, upstream,
+    without telling you. Monitor the level, not just the error.
+  - RATIO DRIFT: if you converted through a ratio, monitor the ratio
+    separately with its own alarm.
+  - SELF-SUPPRESSION: under-provisioning suppresses the demand you then
+    record, and next cycle you forecast the suppressed number. Flag
+    constrained periods and correct or exclude them.
+  - CALIBRATION DECAY: intervals widen or narrow as the regime changes.
+    Track realised coverage continuously.
+
+
+TIMEBOXING A 45-MINUTE ROUND
+----------------------------
+   ~5 min  clarify - decision, lead time, cost of each error direction
+   ~5 min  frame - how many distinct forecasting products is this really
+   ~5 min  target definition and decomposition
+   ~5 min  the quantile, from the cost ratio
+   ~5 min  data hygiene and features
+   ~7 min  model ladder and why you stop where you stop
+   ~7 min  backtest design and the decision-cost metric
+   ~6 min  shipping, monitoring, phasing
+
+
+COMMON TRAPS
+------------
+  - Forecasting a quantity nobody decides on.
+  - Reporting a point forecast for an asymmetric decision.
+  - Random splits, or a single holdout at the end of the series.
+  - MAPE as the headline metric.
+  - Never quoting a naive baseline, so no one can tell if it is good.
+  - Recursive lags over a 90-day horizon.
+  - A feature that will not exist at forecast time.
+  - Deep learning on one short series.
+  - Forecasting at a finer grain than any decision needs.
+  - Treating an outage day as demand.
+  - Shipping without storing forecast vintages.
+
+
+#######################################################################
+PART B - THE ANSWER (spoken, as if answering the interviewer)
+#######################################################################
+--------------------------------------------------------------------
+0. HOW I AM GOING TO STRUCTURE THIS
+--------------------------------------------------------------------
+
+Let me say where I am going, because the framing carries most of the
+value in this one.
+
+I will start with the decisions rather than the series, because I think
+what looks like one forecasting problem is actually four different
+products with four different horizons and four different cost shapes -
+and one of the four, I do not think we should build at all. Then I will
+pin the target, and I want to spend real time there because the obvious
+target is the wrong one. Then the quantile, then data hygiene, then
+features, model, backtest, shipping and monitoring. I will finish with
+what is on the CFO's desk in three weeks.
+
+The headline I want to flag up front: the money here is not in model
+accuracy. It is in the fact that today we produce a single number with
+no uncertainty attached, and then make a commitment decision with a 2.2x
+asymmetric penalty against it. You can capture most of the available
+savings with seasonal naive plus an empirical error distribution and a
+newsvendor calculation, and zero machine learning. I want to earn that
+claim rather than assert it, but it shapes how I would sequence the
+work: measurement harness first, quantiles second, model third.
+
+
+--------------------------------------------------------------------
+1. CLARIFYING QUESTIONS (six, and two of them change the answer)
+--------------------------------------------------------------------
+
+Q1. Is the CDN commitment on TOTAL MONTHLY VOLUME, or on a peak
+    transfer RATE? This is the most important question I have. A volume
+    commit means I forecast the monthly sum of bytes, and day-to-day
+    variance largely cancels within the month. A rate commit means I
+    forecast the peak, and the variance is the entire problem. The
+    context says committed egress volume, so I will assume volume, but
+    if it is a 95th-percentile rate commit - which many CDN contracts
+    are - my target changes completely and most of this answer changes
+    with it.
+
+Q2. What exactly is "peak concurrent streams", and what is the pool
+    ceiling denominated in? The daily maximum of per-minute concurrency
+    is a different series from the p99 of per-minute concurrency, and
+    the second is far more stable. If the ceiling is in instances or in
+    Gbps rather than streams, I would rather forecast the thing the
+    ceiling is set in.
+
+Q3. What is the cost of a playback failure? I can price the CDN side
+    from the contract, but the capacity side needs a number for what the
+    12 October incident actually cost. I would want to convert that
+    4-point retention gap into money, because that ratio is what sets
+    the safety margin, and right now the 15% in the spreadsheet is
+    somebody's guess.
+
+Q4. Is the reserved pool ceiling a hard cap, or can we burst? The
+    context says we can burst at 3x with a 20-minute provisioning lag.
+    That matters enormously: it means under-provisioning is not a cliff,
+    it is an expensive slope with a 20-minute hole in it. So the real
+    question is whether we can predict 20 minutes ahead intraday, which
+    is a different and much easier problem than predicting a month
+    ahead. I will come back to this.
+
+Q5. The listening-hour definition changed 19 months ago and the bitrate
+    ladder changed 8 months ago. Has anyone quantified either? If not I
+    will, and the first one may cost me a third of my usable history.
+
+Q6. How firm is the marketing plan? The context says planned and actual
+    spend diverge. I want the historical distribution of that divergence
+    before I put planned spend in a model, because a noisy regressor
+    with a confident coefficient is worse than no regressor.
+
+
+--------------------------------------------------------------------
+2. BEFORE I DESIGN ANYTHING: IS THIS WORTH BUILDING
+--------------------------------------------------------------------
+
+I want to size the prize first, because it determines how much system
+is appropriate, and the honest answer here constrains the design.
+
+    CDN overage, last 12 months                        Rs 21 lakh
+    Unused CDN commitment, last 12 months              Rs 14 lakh
+    ------------------------------------------------------------
+    Identifiable annual waste on the CDN line          Rs 35 lakh
+
+Against a CDN line of about Rs 2.2 crore, that is roughly 16% waste. A
+good forecast plus a correctly chosen commit level will not recover all
+of it - some of that variance is genuinely unpredictable - but
+recovering half is realistic, so call it Rs 15 to 20 lakh a year.
+
+Then the capacity side. One 90-minute incident hit about 80,000 users
+with a 4-point retention gap. If a retained user is worth on the order
+of Rs 400 in contribution terms - and I would want that number from
+finance rather than from me - that single incident cost:
+
+    80,000 x 4% x Rs 400  =  about Rs 12.8 lakh
+
+Which is comparable to a full year of CDN waste, from ninety minutes.
+Meanwhile 15% of extra headroom on a Rs 45 lakh pool is about Rs 7 lakh
+a year. So on those numbers, carrying generous headroom on capacity is
+cheap insurance and we should not be trying to trim it - we should be
+trying to never breach it again.
+
+That gives me the shape of the whole engagement: the CDN problem is a
+COST OPTIMISATION where I want the commit near the middle of the
+distribution, and the capacity problem is a RELIABILITY problem where I
+want to sit far out in the tail. Same demand, opposite postures. If we
+forecast one number and use it for both, we will always be wrong on at
+least one of them - which is precisely what has been happening.
+
+Total recoverable, maybe Rs 20 to 30 lakh a year plus incident
+avoidance. That justifies one engineer for a quarter and a small, boring
+system with good tests. It does not justify a forecasting platform, a
+feature store, or anything with a transformer in it. I would say that
+out loud to the stakeholders, because scoping down is cheaper to do in
+week one than in month six.
+
+
+--------------------------------------------------------------------
+3. THIS IS FOUR DECISIONS, NOT ONE FORECAST
+--------------------------------------------------------------------
+
+Here is how I would separate them, and this table is the main thing I
+would put on the whiteboard.
+
+  DECISION          TARGET SERIES        GRAIN  HORIZON  POSTURE
+  ---------------------------------------------------------------------
+  CDN commit        monthly egress GB    daily  30-60d   near median
+                                         -> sum
+  Peak capacity     daily peak           daily  30-60d   far tail
+                    concurrency
+  Transcode pool    hours of audio       weekly 90d      not a forecast
+                    ingested                             (see below)
+  Release calendar  weekly listening     weekly 90d      ranking only
+                    hours
+
+Three observations, and the third is the one I care about most.
+
+FIRST, the horizons are similar but the POSTURES are opposite. CDN wants
+roughly the median because overage is only 2.2x. Capacity wants roughly
+the 99th percentile because the downside is retention. Those are both
+served by one distributional forecast and two different read-offs - so
+one model, two quantiles, not two models.
+
+SECOND, the release calendar does not need the level at all. Programming
+is choosing WHICH week to launch in. If my forecast is 10% low on every
+week but gets the ordering of weeks right, that decision is perfectly
+served. So the release calendar is evaluated on rank correlation across
+weeks, not on absolute error. Same forecast, completely different
+success metric, because it is a different decision.
+
+THIRD, and I would push back here: transcode capacity is not a demand
+forecasting problem at all. It scales with hours of audio INGESTED, and
+ingest is driven by the publishing schedule, which the content team
+owns and already knows 90 days out. That is a join against the content
+calendar plus a per-minute transcode cost, not a model. I would kill
+that sub-project in the first week and hand programming a spreadsheet
+formula. If we later find that ingest volume is itself unpredictable
+because creators deliver late, then it becomes a forecasting problem -
+but about DELIVERY, not about listening.
+
+Killing one of four is not scope avoidance. It is the highest-leverage
+thing I do all quarter, because it stops us modelling a quantity that is
+already known.
+
+
+--------------------------------------------------------------------
+4. THE TARGET: THE OBVIOUS ONE IS WRONG
+--------------------------------------------------------------------
+
+The title of this case says "listening hours". I do not think listening
+hours is the right target for the CDN decision, and this is where I
+would spend my time.
+
+The invoice is denominated in BYTES. Listening hours convert to bytes
+through a ratio - average bytes per listening hour - and we know from
+the context that this ratio has been drifting up for eight months
+because a 160 kbps premium tier was added. So a perfect listening-hours
+forecast multiplied by a stale ratio gives a wrong bill, and the error
+will be systematically low and growing.
+
+Two candidate fixes:
+
+  (a) Forecast daily egress GB directly from CDN logs. It is the billed
+      quantity, we have about 1,100 daily observations of it, and the
+      bitrate drift is inside the series so the model can absorb it.
+
+  (b) Decompose:   egress_t = listening_hours_t x bytes_per_hour_t
+      and forecast the two factors separately.
+
+I would go with (b), and this is a considered choice rather than a
+reflex. The two factors have completely different dynamics. Listening
+hours carry all the seasonality - the weekly cycle, the festivals, the
+monsoon lift. Bytes per hour is a slow structural trend driven by the
+premium subscriber mix and the bitrate ladder, with no weekly pattern at
+all. Forcing one model to represent both means the model has to learn a
+slow trend and a strong seasonal in the same parameters.
+
+Decomposing buys three things. Error is diagnosable - when the bill is
+off, I know immediately whether it was demand or mix. A product decision
+to change the ladder touches exactly one factor and I can override it
+directly instead of waiting for the model to relearn. And the listening
+hours factor is reusable for the release calendar and the capacity
+model, so I build one demand model and three read-offs.
+
+The risk of decomposing is that errors in the two factors can compound
+and the combined interval is not simply the product of the two
+intervals. I would handle that by simulating: draw from both factor
+distributions jointly in the backtest to get the egress distribution,
+rather than multiplying quantiles, which is wrong.
+
+For PEAK CAPACITY the target is daily maximum concurrency, modelled
+directly rather than derived from daily hours. Peak depends on the
+intraday shape, and the shape shifts - weekends flatten out, festivals
+shift later into the night. But I would monitor the ratio of peak to
+daily hours as a stability check, because if that ratio moves, the
+intraday shape is changing and both models need attention.
+
+One thing I would NOT do: forecast per user, per episode, per language
+or per city. Nobody makes a decision at those grains. Aggregate series
+are dramatically easier and more accurate, and granularity without a
+decision behind it is cost with no return.
+
+On grain and horizon: I forecast DAILY and sum to the month, never
+monthly directly. Three years gives 36 monthly observations, which is
+not enough to learn anything, while daily gives about 1,100 and carries
+the weekly and holiday structure that actually drives the sum.
+
+
+--------------------------------------------------------------------
+5. PICKING THE QUANTILE - THIS IS WHERE THE MONEY IS
+--------------------------------------------------------------------
+
+This is the part I would not let get skipped, because it is worth more
+than every modelling decision in this answer combined.
+
+We commit C gigabytes at Rs 1.60. We pay for C whether we use it or not.
+If actual usage A exceeds C, the excess is billed at Rs 3.52.
+
+    E[cost](C) = 1.60 C + 3.52 E[max(A - C, 0)]
+
+Differentiate and set to zero:
+
+    1.60 - 3.52 P(A > C) = 0
+    P(A > C) = 1.60 / 3.52 = 0.4545
+    P(A <= C) = 0.5455
+
+So the optimal commitment is the 55th percentile of the monthly volume
+distribution. Equivalently, by the critical fractile: the cost of being
+one GB short is the overage premium, Rs 3.52 - Rs 1.60 = Rs 1.92, and
+the cost of one wasted committed GB is Rs 1.60, giving
+1.92 / (1.92 + 1.60) = 0.545.
+
+I want to draw out why that is interesting. Everyone's instinct with a
+penalty attached is to commit high and be safe. The arithmetic says
+commit barely above the median, because a 2.2x multiplier is a mild
+penalty. The current practice of adding a flat 15% safety margin is not
+conservative-and-therefore-fine; it is systematically overpaying, and it
+is exactly why eight months had unused commitment. The overage in the
+other four months was not the failure - at the optimum we EXPECT to go
+over in about 45% of months. Somebody needs to hear that clearly,
+because right now overage is being treated as an error to eliminate, and
+eliminating it entirely would cost more than it saves.
+
+Now the capacity side, same demand, different economics. Under-provision
+costs retention; over-provision costs pool spend. From section 2, one
+incident ran around Rs 12.8 lakh against roughly Rs 7 lakh a year for
+15% more headroom. Even on conservative assumptions the ratio of
+underage to overage cost is 50:1 or worse, which puts the fractile at
+50/51, about 0.98. So:
+
+    CDN commit           ->  P55 of monthly egress
+    Capacity ceiling     ->  P98 to P99 of daily peak concurrency
+
+Same underlying demand model, quantiles chosen from two different cost
+functions. If you take one thing from this design, it is that.
+
+Three caveats I would state rather than hide. The fractile assumes the
+cost is linear on both sides; if the contract has minimum-commit
+penalties, tiered rates or a true-up, I redo it with the real contract
+in front of me. Second, I should sanity check against the empirical
+distribution rather than trusting a normal assumption, because monthly
+totals of a growing seasonal series are skewed. Third, the capacity
+number assumes we cannot burst - given we can burst at 3x with a
+20-minute lag, the real answer is a P98 ceiling PLUS a fast intraday
+trigger, which I will come to.
+
+
+--------------------------------------------------------------------
+6. IS THE DATA REAL? (I will not forecast a series I have not audited)
+--------------------------------------------------------------------
+
+Cheap checks, and I would do all of them in week one before any model.
+
+DEFINITION CHANGE, 19 MONTHS AGO. Sessions under 30 seconds were
+excluded. This is the biggest threat to the history. I would measure the
+step by reconstructing both definitions from raw session data across the
+boundary and computing the ratio. If raw sessions are retained I
+backfill the old period onto the new definition and keep all three
+years. If they are not, I have about 19 usable months, which is one and
+a half Diwalis, and I would say so plainly rather than quietly training
+on a series with a step in it. A level shift that nobody flags gets
+absorbed into the trend, and then the trend is wrong going forward.
+
+BITRATE LADDER CHANGE, 8 MONTHS AGO. Already handled by decomposing -
+it lives entirely in bytes-per-hour. I would plot that factor and check
+whether the drift is a ramp as premium mix grows, or a step. A ramp I
+can extrapolate cautiously; a step I model as a step.
+
+LATE-ARRIVING EVENTS. About 2% arrive after partition close, with
+partitions revised for 48 hours. Two rules. First, the forecast job
+never reads a partition less than 48 hours old, or it trains on
+systematically under-counted recent days and learns a phantom downtrend
+at the end of every series. Second, a guard that refuses to run if the
+latest usable partition has under 98% of the event volume of the same
+weekday four weeks prior.
+
+THE 14 MARCH OUTAGE. That is not demand, it is a measurement of our own
+downtime. I mask it and treat it as missing rather than interpolating it
+silently - and I would check what the days either side look like, since
+outages usually produce a recovery bump as people come back. If I leave
+it in, the model learns that mid-March is quiet.
+
+THE AUGUST HIT SHOW. The context says +12% for three weeks settling to
++4%. That is a pulse plus a small level shift, and they need separate
+treatment: the pulse gets an event flag so it does not distort the
+weekly seasonal, and the +4% is genuine new baseline that the trend
+should keep. If I let a single model absorb all of it as trend, I will
+forecast a growth rate we are not actually on.
+
+RECONCILE TO THE INVOICE. Our egress series has to tie out to what the
+CDN vendor billed, month by month, for the whole history. If our numbers
+and the invoice disagree, the invoice wins and I have a data problem to
+fix before I have a modelling problem. I would not present a single
+forecast before that reconciliation passes.
+
+
+--------------------------------------------------------------------
+7. FEATURES, AND THE FORECAST-TIME CONSTRAINT
+--------------------------------------------------------------------
+
+Every feature has to pass one test: will I have its value, for every day
+of the horizon, at the moment I produce the forecast?
+
+KNOWN FUTURE - safe at any horizon:
+  - day of week, week of year, month, day of month
+  - Indian festival calendar with LEAD AND LAG WINDOWS, not single-day
+    flags: Diwali behaviour ramps for days beforehand and decays after.
+    Regional festivals matter here because the catalog is
+    regional-language; Onam and Pongal will move Malayalam and Tamil
+    listening without touching the Hindi catalog.
+  - long weekends and bridge days, which are not the same as holidays
+  - the cricket calendar. IPL and international fixtures are known
+    months ahead and they compete directly for evening attention, which
+    is exactly our peak window. In this market I would expect this to be
+    one of the stronger peak-concurrency features, and it is free.
+  - the content release calendar - known originals launching
+  - school and board exam season, for the regional student-heavy segments
+
+PLANNED BUT UNCERTAIN:
+  - marketing spend. Known a quarter ahead in plan, but the context says
+    plan and actual diverge. Before using it I would regress actual on
+    planned historically and look at the spread. If plan explains actual
+    well, use it. If not, I would rather use a smoothed recent-actual
+    install rate and accept that I cannot anticipate a campaign.
+
+OBSERVED PAST ONLY - and this is the important constraint:
+  - lags and rolling statistics are enormously predictive at short
+    horizons and nearly useless at 90 days.
+
+That last point drives a structural decision. For a horizon of one to
+fourteen days, y_{t-7} and a rolling mean carry most of the signal. At
+day 90 there is no recent observation to lag from, and feeding the
+model's own predictions back recursively over 90 steps compounds error
+badly. So I build two configurations of the same pipeline:
+
+  SHORT HORIZON  (h = 1 to 14)   lags + calendar + exogenous
+                                 drives the capacity ceiling and the
+                                 intraday burst trigger
+  LONG HORIZON   (h = 15 to 120) calendar + exogenous + trend only,
+                                 direct multi-horizon, no lags
+                                 drives the CDN commit and the release
+                                 calendar
+
+Same code, two feature sets, horizon as an explicit parameter. I would
+not pretend one model serves both well.
+
+
+--------------------------------------------------------------------
+8. MODEL CHOICE - AND WHERE I STOP CLIMBING
+--------------------------------------------------------------------
+
+I climb the ladder and stop as soon as the decision-cost metric stops
+improving by more than the maintenance is worth.
+
+  1. Seasonal naive, y_t = y_{t-7}.  The baseline. Free, unbreakable,
+     and on a series with a weekly cycle this strong it will be better
+     than people expect.
+  2. STL decomposition, then seasonal naive plus drift on the
+     deseasonalised level, plus hand-set festival multipliers.
+  3. ETS or Theta. Cheap, well understood, genuinely hard to beat on
+     clean seasonal data - Theta has won forecasting competitions
+     against far fancier things.
+  4. LightGBM on calendar and exogenous features, trained with PINBALL
+     LOSS at each quantile I need. This is my expected landing point.
+     It handles the festival interactions and the cricket calendar
+     naturally, it gives me quantiles directly rather than through a
+     normality assumption on residuals, and it is debuggable.
+
+I would NOT go to DeepAR, TFT or N-BEATS here, and I would say why
+rather than leaving it implied. Those models earn their keep on many
+related series or very long histories. We have one series with about
+1,100 daily observations, of which possibly 570 are on the current
+metric definition. There is not enough data to justify the parameters,
+and there is nobody on a two-person team to debug it at 3am.
+
+The festival point is worth making explicitly. We have seen Diwali three
+times. Any model that claims to have learned the Diwali shape from three
+observations is fitting noise. So festivals get explicit, hand-specified
+event windows with a pooled multiplier across similar festivals and a
+prior pulled toward the overall holiday effect - not a freely learned
+per-festival coefficient. I would rather have a slightly biased festival
+estimate that I can explain and override than a variance-heavy one that
+nobody trusts. This is also why the human override in section 10 is not
+optional.
+
+For BYTES PER HOUR, the second factor: this is a slow, smooth,
+non-seasonal trend. A simple damped trend or a regression on premium
+subscriber share is right, and I would damp it rather than extrapolate
+linearly, because mix shifts saturate.
+
+
+--------------------------------------------------------------------
+9. EVALUATION - BACKTEST THE WAY YOU WILL FORECAST
+--------------------------------------------------------------------
+
+The backtest has to imitate production exactly.
+
+In production, we declare the CDN commit on the 1st, 30 days ahead, and
+we only know data settled to 48 hours prior. So the backtest is: for
+each month in the history, stand on the 1st, hide everything after the
+information cutoff, forecast the next 30 days, sum, and compare. That
+gives me 30-odd origins over three years - not a lot, which is itself
+worth stating, because it limits how finely I can distinguish models and
+argues against picking a complex one on a small measured margin.
+
+For the capacity model, origins are daily with a 30-day horizon, which
+gives far more evaluation points.
+
+Metrics, in the order I would present them:
+
+  1. DECISION COST IN RUPEES. Replay the actual commitment decision over
+     the backtest under each candidate and price it with the real
+     contract. This is the headline and it is the only number the CFO
+     should be shown. Crucially, I score the SPREADSHEET the same way -
+     the incumbent is a model and it gets a row in the table. If the
+     spreadsheet cost Rs 35 lakh and seasonal-naive-plus-quantiles costs
+     Rs 16 lakh and LightGBM costs Rs 14 lakh, the interesting finding
+     is that most of the gain came from the quantile, not the model.
+  2. PINBALL LOSS at P55 and P99, the quantiles we actually consume.
+  3. COVERAGE CALIBRATION. Over the backtest, is our P99 exceeded about
+     1% of the time? An uncalibrated interval is worse than no interval
+     because it is acted on.
+  4. MASE against seasonal naive, as the point-accuracy sanity check.
+     I would not lead with it and I would not use MAPE at all.
+  5. For the release calendar only: Spearman rank correlation of
+     predicted versus actual weekly ordering, over a 90-day horizon.
+
+One statistical caution I would raise unprompted: with about 30 monthly
+origins I will be comparing models on a small sample, so I would use a
+Diebold-Mariano test or a simple block bootstrap over origins rather
+than declaring a winner on a raw mean difference. Otherwise I will pick
+a model on noise and then defend it for a year.
+
+
+--------------------------------------------------------------------
+10. ARCHITECTURE AND SHIPPING
+--------------------------------------------------------------------
+
+Nothing here is real-time. This is a daily batch job with a monthly
+decision hanging off it, and the design should look boring.
+
+    app events                    CDN vendor logs
+        |                                |
+        v                                v
+    streaming pipeline               daily pull
+        |                                |
+        v                                v
+    fct_listening_daily            fct_egress_daily
+    (revised for 48h)              (ties to invoice)
+        |                                |
+        +----------------+---------------+
+                         v
+                  feature build
+       calendar | festival table | cricket fixtures | release plan
+       marketing plan | premium subscriber share
+                         |
+                         v
+                 weekly retrain  ---->  model registry (versioned)
+                         |
+                         v
+                 daily forecast job
+       h = 1..120, quantiles P05 P50 P55 P90 P99, both factors,
+       joint simulation for egress
+                         |
+                         v
+       fct_forecast (origin_date, target_date, horizon, quantile,
+                     factor, value, model_version)
+                         |
+       +-----------+-----+------+--------------+
+       v           v            v              v
+   CDN commit   autoscaler   programming    finance
+   recommender  ceiling      week ranking   variance report
+   (monthly,    (monthly +   (weekly)       (monthly)
+    human       intraday
+    sign-off)   trigger)
+
+Runtime budget: the whole pipeline under 30 minutes, running at 07:00
+IST on data settled to 48 hours. There is no latency requirement worth
+engineering for.
+
+Three things on that diagram that matter more than the boxes.
+
+FORECAST VINTAGING. Every forecast is written with the origin date it
+was made from and the model version that made it. Six months from now
+somebody will ask what we predicted on 1 March for April, and if we
+overwrote it we cannot answer, cannot evaluate, and cannot defend the
+system. This costs nothing to do on day one and is impossible to
+retrofit.
+
+HUMAN SIGN-OFF ON THE COMMIT. The CDN commitment is monthly, large and
+irreversible. The system recommends, a named human approves, and every
+override is logged with a reason. Overrides are not a failure of
+automation - they are labelled data about what the model does not know,
+and after two quarters the override log tells you exactly what feature
+is missing.
+
+THE INTRADAY BURST TRIGGER. This is the piece the monthly forecast
+cannot solve. We can burst at 3x with a 20-minute provisioning lag, so
+the question that actually prevents the next 12 October is not "what
+will peak be next month" but "will we breach the ceiling in the next 20
+minutes". That is a short-horizon intraday problem on live concurrency
+telemetry, and it is a far easier prediction than a monthly one. I would
+build it as a simple rule on the current concurrency curve against the
+same weekday's shape, triggering a pre-warm well before the ceiling. The
+monthly P99 sets the standing ceiling; the intraday trigger catches the
+tail the monthly model was never going to see.
+
+
+--------------------------------------------------------------------
+11. FAILURE MODES AND MONITORING
+--------------------------------------------------------------------
+
+What I watch, and what it catches:
+
+  - FESTIVAL CALENDAR ROT. Diwali moves every year. If nobody maintains
+    the table, the model breaks the same month annually and the failure
+    looks like a modelling problem. Named owner, annual review, and an
+    alert if any forecast date falls within 14 days of a known festival
+    with no calendar entry.
+  - BYTES-PER-HOUR DRIFT. Monitored as its own series with its own
+    alarm. A product decision to change the bitrate ladder will break
+    the bill forecast while listening hours stay perfect, and without
+    this alarm the post-mortem takes a week.
+  - DEFINITION DRIFT. Alert on a level shift in listening hours that is
+    not matched by a shift in sessions or DAU. That pattern means
+    somebody changed a definition upstream.
+  - LATE OR PARTIAL DATA. The 98%-of-same-weekday guard, and the job
+    fails loudly rather than forecasting on a partial day.
+  - CALIBRATION DECAY. Rolling realised coverage of each published
+    quantile. If the P99 is being exceeded 5% of days, the intervals are
+    too tight and the capacity decision is being made on a fiction.
+  - ACCURACY DRIFT. Rolling MASE of live forecasts against the backtest
+    MASE; alert on two consecutive weeks of material degradation.
+  - SELF-SUPPRESSION. The one that is subtle and specific to this case:
+    if we under-provision and playback fails, listening drops, and next
+    month we forecast the suppressed number and under-provision again.
+    Every period where concurrency was at or above the ceiling gets
+    flagged, and those days are either excluded from training or
+    corrected upward. This is the small version of what case 05 does at
+    scale, and it is the only feedback loop in this design.
+  - FALLBACK. If the job fails, serve the previous run's forecast, and
+    if that is stale, seasonal naive. The autoscaler cannot accept a
+    null. A capacity system that returns nothing is worse than one that
+    returns something slightly old.
+
+
+--------------------------------------------------------------------
+12. WHAT IS READY IN THREE WEEKS, AND WHAT COMES AFTER
+--------------------------------------------------------------------
+
+The CFO needs a number in three weeks, so the sequencing is forced - and
+it lines up with where the value actually is.
+
+WEEK 1 - MEASUREMENT AND AUDIT, NO MODEL
+  Reconcile our egress series to twelve months of invoices. Quantify the
+  19-month definition change and decide how much history is usable. Mask
+  the outage, flag the hit-show pulse. Build the rolling-origin backtest
+  harness and score the SPREADSHEET on it - so we can say, with a
+  number, what the current process costs. That number is what buys the
+  rest of the quarter.
+
+WEEK 2 - BASELINE PLUS QUANTILES
+  Seasonal naive with drift and hand-set festival multipliers, plus the
+  empirical distribution of its own backtest errors. Apply the
+  newsvendor fractile. This gives a defensible P55 commit recommendation
+  and a P99 capacity ceiling with no machine learning in it at all. My
+  expectation is that this captures most of the recoverable Rs 20 to 30
+  lakh, because the failure today is the absence of a distribution, not
+  the absence of a model.
+
+WEEK 3 - SHIP THE DECISION, NOT THE MODEL
+  Deliver the commit recommendation for next quarter with the interval,
+  the assumptions and the backtested decision cost written next to it.
+  Ship the daily pipeline, the forecast table with vintaging, and the
+  capacity ceiling recommendation. Retire the flat 15% margin and
+  replace it with a stated fractile.
+
+MONTH 2
+  LightGBM with pinball loss, both horizon configurations, exogenous
+  regressors including the cricket calendar. Ship it ONLY if the
+  decision-cost backtest beats the week-2 baseline by a margin that
+  survives a block bootstrap. If it does not, we keep the baseline and I
+  report that as a result rather than shipping complexity to look busy.
+
+MONTH 3
+  The intraday burst trigger, which is the thing that actually prevents
+  another 12 October. Calibration monitoring. Hand programming the
+  weekly ranking view.
+
+NOT IN SCOPE, DELIBERATELY: per-language or per-city forecasts, hourly
+granularity, a feature store, and any deep model. None of them have a
+decision behind them today. If a decision appears, they become easy to
+add, because the pipeline is already the right shape.
+
+
+--------------------------------------------------------------------
+13. THE 60-SECOND VERSION
+--------------------------------------------------------------------
+
+This looks like one forecast but it is four decisions, and one of them -
+transcode - is not a forecasting problem at all, it is a join against
+the publishing calendar. Of the rest, CDN commitment wants a quantile
+near the median, because the newsvendor fractile on a 2.2x overage rate
+is P55, while capacity wants P98 or higher because a breach costs
+retention. Same demand, opposite postures, which is why one number
+feeding both has been failing on both.
+
+I would not forecast listening hours for the CDN decision. I would
+decompose egress into listening hours times bytes per hour, because the
+bitrate ladder changed eight months ago and only the second factor
+moved. Daily grain, summed to the month, never monthly directly.
+
+Before any of that I audit the 19-month definition change, which may
+cost me a third of my history, and reconcile the series to the invoice.
+
+Model-wise I expect to land on LightGBM with pinball loss on calendar
+and exogenous features, with the cricket calendar as a real feature in
+this market - but I would ship seasonal naive plus an empirical error
+distribution in week two, because the money here is in producing a
+distribution at all, not in the model that produces it.
+
+Everything is judged on backtested decision cost in rupees, with the
+current spreadsheet scored as the incumbent, on rolling origins that
+imitate the real declaration date.

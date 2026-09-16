@@ -1,0 +1,27 @@
+VISION
+======
+
+WHAT BELONGS HERE
+-----------------
+Image and video understanding: classification, detection, OCR, visual
+search, thumbnail selection, video segmentation, on-device inference.
+
+THE SKILL THIS FOLDER DRILLS
+----------------------------
+Annotation is the budget. Bounding boxes and segmentation masks cost real
+money per image, so the design is largely about spending that budget well:
+active learning, weak labels, synthetic data, pretrained backbones.
+
+  - label cost per example drives the whole data strategy
+  - active learning: label the examples the model is least sure about
+  - augmentation and synthetic data, and where they stop helping
+  - edge and on-device constraints: quantisation, distillation, model size
+  - video is not images - temporal redundancy, sampling, and cost
+  - distribution shift from cameras, lighting, geography, demographics
+  - fairness auditing by segment where the harm is visible and public
+
+CANDIDATE CASES
+---------------
+  01  Thumbnail selection to maximise click-through without clickbait.
+  02  Visual search over a product catalog.
+  03  On-device classification under a 30ms and 10MB budget.

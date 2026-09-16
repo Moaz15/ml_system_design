@@ -1,0 +1,31 @@
+RECOMMENDATION
+==============
+
+WHAT BELONGS HERE
+-----------------
+Any surface where the system picks items for a user with no query typed.
+Homepage rails, "because you listened to", related items, feed ranking,
+next-episode autoplay, email digests of content.
+
+THE SKILL THIS FOLDER DRILLS
+----------------------------
+Implicit feedback. There is no ground truth, only behaviour that you chose
+to call a label, and the model's own output becomes tomorrow's training
+data. Everything hard here follows from those two facts:
+
+  - what counts as a positive (click / dwell / completion / return)
+  - retrieval then ranking, because the catalog does not fit the ranker
+  - position bias and the popularity feedback loop
+  - cold start for new users, new items and new markets - three problems
+  - diversity, freshness and the exploration/exploitation trade-off
+
+CANDIDATE CASES
+---------------
+  01  Homepage rails for an audio app with 18 months of listen logs.
+      EASY. Abundant data, clean label. Drills the spine end to end.
+  02  The same surface on day zero - new market, no listen history.
+      Cold start from nothing. Data strategy, not architecture.
+  03  Related-content rail: item-to-item at catalog scale.
+  04  Feed ranking with multiple competing objectives and a value model.
+  05  Recommendations for a two-sided marketplace where creators churn if
+      their reach collapses.

@@ -1,0 +1,126 @@
+CASE 01 - CORE: Committing to Capacity You Cannot Return
+========================================================
+Read this one until it is boring. The full case (forecasting_case_01.txt)
+is the same problem with realistic mess added; do not open it until the
+five moves below are automatic.
+
+
+THE PROBLEM
+-----------
+An audio app streams about 900,000 listening hours a day. Listening is
+growing, and it has a strong weekly cycle - weekends well above midweek.
+
+The CDN contract works like this. Once a month, you declare how many
+gigabytes you will use next month. You pay Rs 1.60 per GB for everything
+you declared, used or not. Anything beyond what you declared is billed at
+2.2x, so Rs 3.52 per GB. Unused commitment is not refunded.
+
+Today, finance takes last month's number, multiplies by a growth factor,
+adds 15% "for safety", and declares that. Last year they went over in 4
+months and left commitment unused in the other 8.
+
+    What number do you declare?
+
+
+THE FIVE MOVES
+--------------
+Every one of these transfers to problems that have nothing to do with
+forecasting. That is why this case comes first.
+
+  M1  FIND THE DECISION
+      A prediction that changes no action is decoration. Name the action,
+      its lead time, and how often it repeats. Here: one number, declared
+      30 days ahead, locked for a month.
+
+  M2  PRICE BOTH DIRECTIONS OF ERROR
+      Declaring too little costs the overage premium: Rs 3.52 - Rs 1.60
+      = Rs 1.92 per GB. Declaring too much costs the wasted commitment:
+      Rs 1.60 per GB. The two are not equal, so the best guess is NOT
+      the average.
+
+  M3  LET THE PRICES PICK THE QUANTILE
+      Cost of being short over cost of being short plus cost of being
+      long:
+
+          1.92 / (1.92 + 1.60) = 0.545
+
+      Declare the 55th percentile of next month's usage.
+      Not the mean. Not the mean plus a safety margin.
+
+  M4  FORECAST WHAT IS BILLED
+      The invoice is in gigabytes, not listening hours. Forecast
+      gigabytes. Any proxy you convert through a ratio will drift, and
+      you will be wrong in a direction you cannot see.
+
+  M5  SCORE WHAT YOU WOULD OTHERWISE SHIP
+      Replay history: what would the spreadsheet have cost? What would
+      "declare last month's number" have cost? Price both in rupees.
+      That is the bar your model has to clear, and if it does not clear
+      it, you ship the simpler thing.
+
+
+THE ANSWER, IN ONE PASS
+-----------------------
+The decision is a single monthly number, locked 30 days out, with an
+asymmetric penalty. So the output cannot be a point forecast - it has to
+be a distribution, and I read one quantile off it.
+
+The quantile comes from the contract, not from taste. Being one GB short
+costs Rs 1.92 extra; one wasted GB costs Rs 1.60. That fraction is 0.545,
+so I declare the P55 of next month's gigabytes.
+
+That result is worth sitting with, because it contradicts the instinct.
+Everyone's reflex with a penalty attached is to declare high. The
+arithmetic says declare barely above the median, because 2.2x is a mild
+penalty. The 15% safety margin is not caution, it is systematic
+overpayment - which is exactly why 8 months had unused commitment. And
+going over in 4 of 12 months is not a failure: at the optimum we EXPECT
+to go over about 45% of the time. Somebody needs to hear that plainly.
+
+I forecast daily gigabytes and sum to the month, rather than forecasting
+monthly totals directly. Three years of history is about 1,100 daily
+observations but only 36 monthly ones, and the daily series carries the
+weekly cycle that drives the sum.
+
+For the model I start with seasonal naive - this week looks like last
+week - and take the distribution from its own historical errors. Then I
+replay the last twelve months: what would the spreadsheet have cost, what
+would seasonal-naive-at-P55 have cost. I expect most of the saving to
+come from the quantile, not from the model, because today's failure is
+the absence of a distribution, not the absence of machine learning.
+
+Only if that is not enough do I climb to something with parameters in it.
+
+
+WHAT TRANSFERS
+--------------
+  M1  Find the decision
+      -> Every ML problem. "What action changes?" kills more bad
+         projects than any other question.
+
+  M2  Price both directions
+      + -> Fraud: what does a blocked good customer cost vs a missed
+  M3  Pick the quantile        fraudster?
+      -> Moderation: what does a wrongly removed post cost vs a missed
+         harmful one? That ratio sets the auto-remove threshold.
+      -> Inventory, staffing, capacity: the same fractile, every time.
+      -> Any time you are about to choose a threshold by eye, or report
+         a mean, ask what the two errors cost. This is the single most
+         portable idea in the repo.
+
+  M4  Forecast what is billed
+      -> Label design everywhere. Predict the quantity the decision is
+         denominated in. Recommenders trained on clicks when the
+         business is paid in purchases are the same mistake.
+
+  M5  Score what you would otherwise ship
+      -> The incumbent is a model, even when it is a human with a
+         spreadsheet. Score it. Report your lift against it in money.
+
+
+WHEN YOU CAN RUN THIS COLD
+--------------------------
+Open forecasting_case_01.txt. It is this same problem with four decisions
+instead of one, a metric definition that changed mid-history, a bitrate
+change that breaks M4, an outage day, and a monitoring plan. None of that
+makes sense until the five moves above are automatic.

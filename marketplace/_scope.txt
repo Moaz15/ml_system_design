@@ -1,0 +1,30 @@
+MARKETPLACE AND MATCHING
+========================
+
+WHAT BELONGS HERE
+-----------------
+Two-sided systems where supply and demand must be matched: ride dispatch,
+delivery assignment, ETA prediction, surge and dynamic pricing, creator
+payouts, seller ranking, inventory allocation.
+
+THE SKILL THIS FOLDER DRILLS
+----------------------------
+Users compete for the same finite supply, so treatment affects control.
+The standard user-randomised A/B is BIASED here, and knowing that is the
+single strongest signal in this domain.
+
+  - interference and network effects; switchback and region-level tests
+  - optimising for the match, not for either side's local metric
+  - prediction feeding an optimiser: the model is one input to an
+    assignment problem, not the decision itself
+  - ETA as a regression with an asymmetric cost - early and late are not
+    equally bad, and the prediction changes the outcome it predicts
+  - supply-side churn as the slow, expensive, hard-to-reverse damage
+  - liquidity and cold start in a new city or category
+
+CANDIDATE CASES
+---------------
+  01  ETA prediction, and why the obvious loss function is wrong.
+  02  Dispatch and matching under supply scarcity.
+  03  Launching in a new city with no supply and no demand history.
+  04  Creator payout ranking without collapsing the long tail.

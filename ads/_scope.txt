@@ -1,0 +1,28 @@
+ADS
+===
+
+WHAT BELONGS HERE
+-----------------
+CTR and CVR prediction, auction and ranking, bidding, budget pacing,
+audience targeting, frequency capping, incrementality measurement.
+
+THE SKILL THIS FOLDER DRILLS
+----------------------------
+The only domain where the model's output is spent directly as money, so
+CALIBRATION matters more than ranking quality. A well-ranked but badly
+calibrated model bids wrong and loses cash on every impression.
+
+  - expected value = p(click) x p(convert | click) x value, so each term
+    must be a probability, not a score
+  - delayed and partial conversion labels, and attribution windows
+  - extreme sparsity and high-cardinality categorical features
+  - the auction: what the model decides vs what the mechanism decides
+  - three-sided objective: user, advertiser, platform
+  - incrementality vs correlation - would they have converted anyway
+
+CANDIDATE CASES
+---------------
+  01  CTR prediction for a new in-app ad slot.
+  02  Delayed conversions: training when the label lands 7 days later.
+  03  Budget pacing and under-delivery.
+  04  Measuring incremental lift when you cannot hold out easily.

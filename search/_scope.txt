@@ -1,0 +1,29 @@
+SEARCH
+======
+
+WHAT BELONGS HERE
+-----------------
+Anything where the user states intent in a query. Product search, content
+search, autocomplete and query suggestion, query understanding, semantic
+and hybrid retrieval, "no results" recovery.
+
+THE SKILL THIS FOLDER DRILLS
+----------------------------
+Intent is declared, so relevance is judgeable - which means human
+judgements, graded labels and offline eval are actually available here,
+unlike in recommendation. The tension is between what a rater calls
+relevant and what a user buys or finishes.
+
+  - query understanding: intent classes, spell correction, entities
+  - navigational vs broad vs long-tail queries fail differently
+  - lexical (BM25) vs vector vs hybrid retrieval, and why hybrid wins
+  - relevance judgements: guidelines, rater agreement, cost per judgement
+  - NDCG on click labels greenlighting a model that loses money
+
+CANDIDATE CASES
+---------------
+  01  Search ranking for a content catalog: retrieval, ranking, eval.
+  02  Zero-result and low-recall queries on a small or new catalog.
+  03  Autocomplete under a 50ms budget.
+  04  Semantic search retrofit: is a vector index worth it over BM25.
+  05  Multilingual and code-mixed queries with no labelled data.

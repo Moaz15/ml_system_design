@@ -1,0 +1,30 @@
+CONTENT MODERATION AND TRUST
+============================
+
+WHAT BELONGS HERE
+-----------------
+Policy enforcement on user or creator content: harmful content detection,
+NSFW, spam, copyright, age-rating, review authenticity, appeals routing.
+
+THE SKILL THIS FOLDER DRILLS
+----------------------------
+The label is a POLICY, not a behaviour. It has to be written by humans
+before it can be learned, and reasonable annotators will disagree. This is
+the folder where human-in-the-loop design is the system design.
+
+  - policy -> annotation guideline -> label, and measuring rater agreement
+  - precision vs recall as a values decision with real-world harm on both
+    sides, not a tuning knob
+  - the review queue IS the architecture: auto-remove / auto-allow /
+    escalate, and how the thresholds carve those three zones
+  - capacity planning against a finite human review team
+  - appeals as a label-correction channel and a fairness audit
+  - multimodal: text, audio, image, plus context and intent
+  - rare, high-severity classes where a single miss is the whole story
+
+CANDIDATE CASES
+---------------
+  01  Moderating user-uploaded audio at ingest, with a 40-person review
+      team and a 5-minute publish SLA.
+  02  A new policy category with zero labelled examples.
+  03  Appeals routing and measuring wrongful-removal rate.

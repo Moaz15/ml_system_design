@@ -1,0 +1,31 @@
+USER LIFECYCLE
+==============
+
+WHAT BELONGS HERE
+-----------------
+Churn prediction, lifetime value, subscription conversion and renewal,
+reactivation, propensity and uplift models, segmentation, pricing and
+discount targeting.
+
+THE SKILL THIS FOLDER DRILLS
+----------------------------
+The label is defined by a WINDOW you choose, and the prediction only
+matters if it drives an intervention that changes the outcome. Both facts
+are routinely skipped by candidates, and both decide the whole design.
+
+  - defining churn: 30 days inactive? failed renewal? a self-serve cancel?
+    Each definition builds a different model and a different product
+  - the prediction is worthless without the action attached to it - who
+    gets the discount, the call, the reactivation push
+  - uplift over propensity: target the persuadable, not the likely
+  - survival analysis and censoring - users who have not churned YET
+  - the self-defeating prophecy: a good model plus a good intervention
+    destroys its own accuracy, so accuracy is the wrong success metric
+  - long label windows versus the need to act early
+  - LTV as a heavy-tailed regression where the mean is a bad summary
+
+CANDIDATE CASES
+---------------
+  01  Subscription churn prediction and the retention offer it drives.
+  02  Free-to-paid conversion propensity with a 14-day trial.
+  03  Discount targeting: uplift modelling under a fixed budget.

@@ -1,0 +1,93 @@
+FORECASTING
+===========
+
+WHAT BELONGS HERE
+-----------------
+Demand, traffic, revenue, capacity, inventory, staffing, infrastructure
+load. Anything indexed by time where the question is "how much, when".
+
+THE SKILL THIS FOLDER DRILLS
+----------------------------
+Time is the axis, so every shortcut that works elsewhere breaks here. A
+random train/test split leaks the future. The cost of error is almost
+never symmetric, so squared error is usually the wrong loss.
+
+  - horizon and granularity drive everything: hourly next-day and monthly
+    next-year are different products
+  - backtesting with rolling origin; no random splits, ever
+  - seasonality, holidays, promotions and one-off events as features
+  - hierarchical forecasts that must reconcile: SKU to category to total
+  - quantile loss and prediction intervals, because the decision needs a
+    range and an asymmetric cost, not a point estimate
+  - intermittent and spiky series in the long tail, where the mean is
+    almost never the right thing to predict
+  - censored history: when past capacity limited what was served, the
+    series records what you COULD do, not what was wanted
+  - cold start for new items with no history
+  - classical baselines (naive, seasonal naive, ETS) that ML must beat,
+    and frequently does not
+
+CANDIDATE CASES
+---------------
+Five cases, ordered by difficulty. Each drills a different forecasting
+failure mode. Industry is tagged because the same spine has to survive
+content, media and supply chain without changing shape.
+
+  01  LISTENING HOURS FOR CAPACITY PLANNING            [CONTENT]  EASY
+      WRITTEN -> forecasting_case_01.txt
+      Forecast daily listening hours and peak concurrent streams 90 days
+      out, to size CDN and transcode capacity and to set the content
+      release calendar.
+      Drills the spine end to end on a clean, dense, strongly seasonal
+      series: choosing horizon and granularity, weekly and festival
+      seasonality, rolling-origin backtesting, and being forced to beat
+      seasonal naive before any ML is allowed in the room.
+      The trap: quoting MAPE on a series with a strong weekly cycle and
+      calling the model good when seasonal naive is within a point of it.
+
+  02  AD INVENTORY FORECASTING FOR SALES COMMITMENTS   [MEDIA]  MEDIUM
+      Sales must promise advertisers a guaranteed number of impressions
+      per targeting segment, one to three months ahead. Over-promise and
+      you owe makegoods; under-promise and you leave revenue unsold.
+      Drills hierarchical forecasting over OVERLAPPING, non-nested
+      segments (age x city x genre) that still have to reconcile to the
+      total, and QUANTILE forecasting as the actual product - sales should
+      be selling the P20, not the mean. The output feeds a booking system,
+      not a dashboard, so the interface is part of the design.
+
+  03  DEMAND FOR A TITLE THAT DOES NOT EXIST YET       [CONTENT]  MEDIUM
+      The commissioning team wants first-90-day listening hours for a
+      proposed show, before it is made, to decide whether to fund it.
+      Drills forecasting with NO SERIES. There is no history for this
+      title, so this is cross-sectional regression over metadata and
+      analogues, pooled across the catalog - not a time series model at
+      all. Recognising that the time-series framing is wrong IS the case.
+      Second layer: the forecast changes the outcome it predicts, because
+      a high forecast buys the show the promotion that makes it true.
+
+  04  SHIPMENT VOLUME PER LANE FOR COURIER CAPACITY    [SUPPLY CHAIN]  HARD
+      A shipping aggregator books pickup and line-haul capacity with
+      courier partners 7 to 14 days ahead, per pickup city and courier.
+      Under-book and shipments sit in backlog and sellers churn;
+      over-book and you pay for empty trucks.
+      Drills the full hierarchy (seller -> city -> zone -> national) with
+      reconciliation, intermittent and spiky demand across the long tail
+      of small sellers, ASYMMETRIC cost where the two error directions are
+      priced differently, and the fact that the forecast is an input to an
+      allocation optimiser rather than the decision itself.
+      Structural breaks are routine, not exceptional: one large seller
+      signing or leaving moves a whole city's series overnight, so the
+      model needs a stated policy for them.
+
+  05  PEAK SEASON CAPACITY: FORECASTING THE SALE       [SUPPLY CHAIN]  HARD
+      Plan headcount, warehouse space and courier contracts for the
+      festive sale season, committed two to three months ahead and
+      effectively irreversible once signed.
+      Drills forecasting an event you have only observed three or four
+      times. The peak dominates the year, so ordinary seasonality methods
+      have almost no data for the only part anyone cares about, and the
+      promo and event calendar becomes the model.
+      The insight the case turns on: you observe SHIPMENTS, not DEMAND.
+      Last peak was capacity-constrained, so the history is CENSORED - it
+      records what you could handle, not what was wanted. Train on it
+      naively and you will under-build forever, every year.
