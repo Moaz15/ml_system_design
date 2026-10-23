@@ -1,0 +1,107 @@
+CHURN PREDICTION AND THE RENEWAL OFFER IT DRIVES
+================================================
+lifecycle/ case 01. Carried across five files rather than one, because
+the modelling section and the measurement section each deserve to be
+read on their own.
+
+Read context.md first. This case is written to that spec: the same
+questions in the same order, and the answer written as speech.
+
+
+THE ONE INSIGHT
+---------------
+The deliverable is not a churn score. It is a TREAT / DO-NOT-TREAT
+policy under a margin budget, and the quantity that policy needs is not
+P(lapse). It is tau - the change in renewal probability CAUSED by the
+offer.
+
+A churn model ranks by risk, so it spends the budget on everyone about
+to leave: the people who will leave regardless, and the people who would
+have renewed anyway. An uplift model ranks by incremental effect, so it
+spends only on the people whose decision the offer actually changes.
+
+The sentence the case turns on:
+
+    not "who will churn?"
+    but "whose renewal decision does an offer change?"
+
+The second sentence is answerable only from randomised data. That is why
+the randomisation, not the model, is the asset this project builds.
+
+
+THE FOUR SEGMENTS THE POLICY HAS TO SEPARATE
+--------------------------------------------
+  SEGMENT         NO OFFER  WITH OFFER  ACTION
+  -------------------------------------------------------------------
+  Sure Things     renews    renews      skip - the discount is pure
+                                        margin burn
+  Persuadables    lapses    renews      TREAT - the only positive
+                                        uplift in the table
+  Lost Causes     lapses    lapses      skip - the spend is wasted
+  Sleeping Dogs   renews    lapses      skip - the contact itself
+                                        causes the loss
+
+Sleeping Dogs are the segment nobody mentions unprompted and they are
+real here. A renewal reminder makes a passive auto-renew charge into an
+active decision: it reminds people they are paying, and it anchors them
+on a price. They renew WORSE when treated. A propensity model cannot
+see this segment at all, because it has no concept of a treatment, and
+you can only detect it with a randomised holdout where the treated
+group underperforms control.
+
+
+READING ORDER
+-------------
+  01_problem.txt       the situation, the scale, the decision, the ask.
+                       Read this one cold and attempt the case before
+                       opening anything else.
+  02_label.txt         unit of analysis, the cycle timeline, snapshot
+                       and label, the leakage rule, features, and the
+                       one column that makes the rest possible.
+  03_modelling.txt     propensity vs uplift, mu_0 / mu_1 / tau, the
+                       learners, the price-response curve, the budget
+                       optimiser, and a worked example on two users.
+  04_system.txt        architecture, component contract, the
+                       chicken-and-egg bootstrap, serving, failure
+                       modes and monitoring.
+  05_measurement.txt   Qini and AUUC, the always-on holdout, the policy
+                       comparison that settles the argument, break-even
+                       arithmetic, and the defensible numbers.
+
+
+WHERE THIS SITS ON THE SPINE
+----------------------------
+context.md section 4, mapped onto this case:
+
+  SPINE STEP            WHERE IT IS ANSWERED HERE
+  -------------------------------------------------------------------
+  1 What are we paid    01_problem - expected revenue per subscriber,
+    in?                 not renewal rate. The two conflict.
+  2 What is the label?  02_label - renewed in [T, T+3], at
+                        (user, cycle) grain, snapshot frozen at T-7.
+                        Plus the assignment column, which is not a
+                        label but decides whether the label is usable.
+  3 How is it scored?   05_measurement - Qini offline, incremental
+                        revenue per discount rupee online.
+  4 What shape is it?   04_system - daily batch, no real-time
+                        inference, because the renewal date is known
+                        in advance.
+  5 What goes in?       02_label - point-in-time features at T-7,
+                        including past-discount and past-offer
+                        exposure.
+  6 What model?         03_modelling - calibrated GBM baseline, then
+                        T-/X-learner uplift, then a dose-response
+                        curve over a discrete depth grid.
+  7 How does it ship?   04_system - explore, learn, exploit; the
+                        holdout never ends.
+  8 How does it rot?    04_system - discount anchoring, offer fatigue,
+                        and the self-defeating prophecy.
+
+
+SCOPE BOUNDARY
+--------------
+Subscription renewal only. Coin unlocks, episode paywalls and any other
+pay-per-item surface are deliberately out of scope: they are a separate
+decision loop with their own label and their own experiment. Holding one
+surface is what keeps the label, the intervention and the measurement
+clean enough to be worth arguing about.

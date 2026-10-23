@@ -1,0 +1,230 @@
+CASE 01 - MODELLING
+===================
+Read 02_label.txt first. Everything here assumes the (user, cycle) row,
+the T-7 snapshot, and the assigned_arm column.
+
+
+#######################################################################
+1. PROPENSITY VERSUS UPLIFT, SIDE BY SIDE
+#######################################################################
+
+                      PROPENSITY              UPLIFT
+  -------------------------------------------------------------------
+  Question            who will churn?         whose decision changes?
+  Target              P(renew | x)            tau(x) = treated minus
+                                              control
+  Label               observed directly       NEVER observed for any
+                                              individual
+  Data needed         any history             randomised treat and
+                                              control
+  Methods             logistic, GBM           T-, S-, X-learner,
+                                              causal forest
+  Metric              AUC, log-loss,          Qini, uplift curve,
+                      calibration             AUUC
+  Used for            rank by risk, set a     rank by tau, allocate a
+                      threshold               budget
+  Blind to            Sure Things and         nothing that matters
+                      Sleeping Dogs           here
+
+Three consequences, and the first is the one that gets argued about:
+
+THE FUNDAMENTAL PROBLEM OF CAUSAL INFERENCE. A given user was either
+treated or not. You never observe both outcomes for the same person, so
+tau(x) has no per-user ground truth, ever. It is estimated across
+groups and validated only in aggregate. Anyone who asks to see the
+model's accuracy on individual uplift predictions is asking for
+something that does not exist.
+
+AUC IS UNUSABLE ON UPLIFT. There is no true per-user value to score
+against. Reporting AUC for an uplift model means you have quietly
+scored the propensity component instead and called it the uplift model.
+
+ESTIMATING A DIFFERENCE IS EXPENSIVE. The variance of a difference is
+the sum of the variances. This is why the sample arithmetic in
+02_label.txt section 7 constrains the roadmap more than any engineering
+work does.
+
+A terminology trap worth clearing up before someone else does:
+PROPENSITY TO CHURN (a predictive score, what growth means) is not a
+PROPENSITY SCORE (P(treat | x), used to adjust for confounding). They
+appear in the same sentence in this project and they are unrelated.
+
+
+#######################################################################
+2. THREE MODELS, AND WHAT EACH ONE IS FOR
+#######################################################################
+
+  M1  PROPENSITY        P(renew | x)       calibrated GBM.
+                                           ELIGIBILITY AND MONITORING
+                                           ONLY. It does not do the
+                                           targeting
+  M2  UPLIFT / CATE     tau(x, arm)        T- or X-learner, or a
+                                           causal forest. Fit ONLY on
+                                           randomised rows
+  M3  PRICE-RESPONSE    tau(x, d)          the dose-response curve
+                                           across depths, with a
+                                           monotonicity constraint
+
+M1 being demoted to eligibility is a deliberate, defensible choice and
+it should be said rather than implied. The propensity model still earns
+its place: it supplies the baseline probability that sets the price
+term in the optimiser, it filters out people who are not in a decision
+at all, and it is the series that tells you whether the population is
+drifting. What it does not do is choose who gets money.
+
+
+#######################################################################
+3. STEP BY STEP
+#######################################################################
+
+STEP 1 - BASELINE RENEWAL, mu_0(x)
+----------------------------------
+Train on CONTROL ROWS ONLY: renewed regressed on features.
+
+Gradient-boosted trees, then calibrated with isotonic regression or
+Platt scaling on a held-out slice. Output: P(renew | x, no offer).
+
+This is the churn model everyone asked for, and it is step one of four.
+Calibration is not optional here and the reason is specific: mu_0 is
+multiplied by a price to produce an expected revenue, so a probability
+that is merely well-RANKED is useless. A model that says 0.8 when the
+truth is 0.5 will mis-rank the entire budget allocation while posting
+an excellent AUC.
+
+STEP 2 - TREATED RENEWAL, mu_1(x, d)
+------------------------------------
+Train on TREATED rows. Two ways to do it:
+
+  - one model per depth (the T-learner): simple, honest, and high
+    variance when a depth arm is thin
+  - one model with d as a feature, under a MONOTONICITY CONSTRAINT so
+    that a deeper discount can never predict a worse renewal
+    probability. LightGBM supports this directly
+
+The monotonicity constraint is doing real work. Without it, a thin d30
+arm will produce pockets of the feature space where 30% off predicts
+lower renewal than 20% off, the optimiser will exploit exactly those
+pockets, and the resulting policy will be noise dressed up as a
+decision.
+
+STEP 3 - UPLIFT
+---------------
+  tau(x, d) = mu_1(x, d) - mu_0(x)
+
+That is the T-learner: two models, subtract. It is the version to
+describe first because it is transparent.
+
+The X-learner improves on it and is worth knowing by name and by
+mechanism: impute each unit's individual effect using the OTHER arm's
+model, regress those imputed effects on features, and combine the two
+resulting estimators weighted by the propensity score. It is better
+precisely when the arms are imbalanced, which they always are here -
+control is deliberately small, because control costs retained revenue.
+
+A causal forest is the alternative, and splits on treatment effect
+heterogeneity directly rather than on outcome. Worth reaching for when
+the heterogeneity is the product, which here it is. Start at the
+T-learner, move when the Qini curve says the extra machinery earns
+something.
+
+STEP 4 - THE POLICY
+-------------------
+For each user, for each depth d in the grid:
+
+    expected_revenue(d) = (mu_0 + tau(x,d)) * plan_price * (1 - d)
+    gain(d)             = expected_revenue(d) - expected_revenue(0)
+    cost(d)             = (mu_0 + tau(x,d)) * plan_price * d
+
+Choose d* = argmax over d of gain(d). Then rank all users by
+gain / cost and treat down that list until the margin budget is spent.
+
+Ranking by gain/cost rather than by gain is what makes it a budget
+allocation rather than a wish list - it is a greedy knapsack, and with
+a Lagrangian on the budget constraint it is the same thing done
+properly. Users with a negative best gain are not merely skipped, they
+are SUPPRESSED, which is the Sleeping Dog guard falling out of the
+arithmetic rather than being bolted on as a rule.
+
+
+#######################################################################
+4. WHY THE DEPTH GRID IS DISCRETE
+#######################################################################
+
+Depth comes from a small grid - 0 / 10 / 20 / 30 percent - and not from
+a continuous optimisation.
+
+The reason is identification, not simplicity. Randomising over four
+arms gives four estimable cells. Randomising over a continuous depth
+gives a dose-response surface fit from data that is thin everywhere and
+is being extrapolated at exactly the depths the optimiser will choose.
+Four arms also keep the experiment explainable to the people who have
+to approve it, and keep every reported number traceable to a cell
+somebody can count rows in.
+
+
+#######################################################################
+5. WORKED EXAMPLE - TWO USERS, ONE MODEL
+#######################################################################
+
+USER A - SURE THING. Heavy listener, autopay on, nine cycles of
+tenure. mu_0 = 0.62, plan price 299.
+
+  DEPTH   tau     P(renew)  PRICE PAID  EXP REVENUE  GAIN
+  -------------------------------------------------------------------
+  0%      -       0.62      299         185.4        -
+  10%     +0.03   0.65      269         174.9        -10.5
+  20%     +0.05   0.67      239         160.2        -25.2
+  30%     +0.06   0.68      209         142.3        -43.1
+
+Every depth loses money. Note what happened: the discount DID raise
+renewal probability at every depth - the offer works - and it still
+destroys value, because the probability gain is smaller than the price
+given up. A churn model would have skipped User A too, but only by
+luck, because it scored them safe. The uplift model skips them for the
+right reason: tau is small because they renew either way.
+
+USER B - PERSUADABLE. Usage halved since last cycle, autopay off, took
+a discount once before. mu_0 = 0.30, plan price 299.
+
+  DEPTH   tau     P(renew)  PRICE PAID  EXP REVENUE  GAIN
+  -------------------------------------------------------------------
+  0%      -       0.30      299         89.7         -
+  10%     +0.12   0.42      269         113.0        +23.3
+  20%     +0.25   0.55      239         131.6        +41.9
+  30%     +0.30   0.60      209         125.5        +35.8
+
+d* = 20%. Thirty percent off CONVERTS MORE PEOPLE AND EARNS LESS, and
+that single line is the entire argument for a dose-response curve
+rather than one fixed discount depth. A system that optimises renewal
+rate picks 30% here and is wrong by Rs 6 per user, every cycle, across
+the whole treated population.
+
+  cost(20%) = 0.55 * 299 * 0.20 = 32.9
+  gain/cost = 41.9 / 32.9 = 1.27
+
+User B enters the budget ranking at 1.27. User A never enters it at
+all.
+
+
+#######################################################################
+6. WHAT THE SYSTEM ACTUALLY OUTPUTS
+#######################################################################
+
+  user    cycle  mu_0  best_d  gain  gain/cost  DECISION
+  -------------------------------------------------------------------
+  u_102   c_02   0.30  20%     41.9  1.27       treat at 20%
+  u_109   c_04   0.41  10%     18.2  0.94       treat at 10%
+  u_101   c_07   0.62  0%      -     -          skip (Sure Thing)
+  u_117   c_01   0.08  30%     2.1   0.09       skip (Lost Cause)
+  u_133   c_09   0.55  0%      -6.4  -          SUPPRESS (negative
+                                                tau - Sleeping Dog)
+  u_140   c_06   0.34  -       -     -          holdout, no contact
+
+Ranked by gain/cost, cut where the budget runs out.
+
+Note the shape of that table, because it is the finding that surprises
+stakeholders: MOST USERS GET NOTHING. A good uplift policy treats a
+minority, and the minority it treats is not the highest-risk minority.
+Note too that u_117, the user most likely to churn in the whole table,
+is skipped. Explaining why that is correct is the moment the project
+either gets approved or does not.

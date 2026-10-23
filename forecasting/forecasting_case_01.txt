@@ -263,8 +263,9 @@ Three tiers, and say all three:
 
   - POINT ACCURACY: MASE by preference - it is scale free and it is
     literally "how many times better than seasonal naive am I", which
-    is the question. Avoid MAPE: it is asymmetric, it punishes
-    over-forecast less than under-forecast, and it explodes near zero.
+    is the question. Avoid MAPE: an under-forecast's error is capped at
+    100% while an over-forecast is unbounded, so minimising MAPE biases
+    the forecast systematically low - and it explodes near zero.
   - DISTRIBUTIONAL: pinball loss at the quantiles you actually use, plus
     coverage calibration - does the P90 contain the truth 90% of the
     time, measured over the backtest.

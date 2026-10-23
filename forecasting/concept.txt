@@ -1,0 +1,703 @@
+FORECASTING - THE CONCEPTS
+==========================
+Read this before any case in forecasting/. It is the mental model and
+the vocabulary, not a case and not an answer.
+
+Everything below hangs off TWO facts. If you remember nothing else,
+remember those two and re-derive the rest.
+
+
+#######################################################################
+IF YOU REMEMBER ONLY FIVE THINGS
+#######################################################################
+
+  1. Time is ordered. The future is not exchangeable with the past, so
+     every technique that assumes rows are interchangeable - random
+     splits, shuffled CV, naive feature engineering - is wrong here.
+
+  2. A forecast is not the product. The DECISION is the product. Find
+     the decision, its lead time, and what each direction of error
+     costs, before you touch a model.
+
+  3. If the two directions of error cost differently, the answer is a
+     QUANTILE, not a mean. Almost every real decision is asymmetric.
+
+  4. Beat seasonal naive or do not ship. It is free, it cannot break,
+     and it is far better than people expect.
+
+  5. Every feature must be knowable at forecast time, for the entire
+     horizon. The horizon decides which features you are even allowed.
+
+
+#######################################################################
+PART 1 - THE TWO FACTS THAT GENERATE EVERYTHING
+#######################################################################
+
+FACT ONE: TIME IS ORDERED.
+
+  Consequences, all of them forced:
+    - no random train/test splits, ever - they train on the future
+    - backtesting must roll forward through time, imitating production
+    - features split into "knowable in advance" and "only observable
+      after the fact", and only the first kind survives a long horizon
+    - errors compound when you feed predictions back as inputs
+    - the data generating process can change (structural breaks), and
+      unlike in cross-sectional ML you cannot resample your way out
+    - the most recent data is the most relevant AND the least settled
+
+FACT TWO: A FORECAST IS AN INPUT TO A DECISION.
+
+  Consequences:
+    - the horizon comes from the decision's lead time, not from taste
+    - the grain comes from what the decision is made over
+    - the loss function comes from what the two errors cost in money
+    - asymmetric cost means you report a quantile, not a mean
+    - the headline metric is decision cost, not accuracy
+    - if no action changes, do not build it - a dashboard is not a
+      decision
+
+
+#######################################################################
+PART 2 - VOCABULARY
+#######################################################################
+
+  TARGET          the quantity being predicted. Prefer the quantity the
+                  decision is denominated in (bytes if the invoice is in
+                  bytes, units if you order units).
+  GRAIN           the time step: hourly, daily, weekly, monthly. Also
+                  the entity grain: total, per SKU, per city.
+  FREQUENCY (m)   observations per seasonal cycle. Daily data with a
+                  weekly cycle has m = 7; monthly with yearly, m = 12.
+  ORIGIN          the moment you stand at to make the forecast. Also
+                  called the forecast origin or cutoff.
+  HORIZON (h)     how far ahead. h=1 and h=90 are different problems
+                  with different feasible feature sets.
+  LEAD TIME       how long before the decision takes effect. This SETS
+                  the horizon.
+  VINTAGE         which origin a given forecast was made from. Store it.
+  IN-SAMPLE       data the model was fit on. OUT-OF-SAMPLE, data after
+                  the origin. Only the second means anything.
+  POINT FORECAST  a single number. PROBABILISTIC / DISTRIBUTIONAL
+                  forecast, a full distribution or a set of quantiles.
+  COVARIATE       an input other than the series' own past. Splits into
+                  KNOWN-FUTURE (calendar, planned promo, published
+                  schedule) and PAST-ONLY (weather actuals, competitor
+                  price).
+  LOCAL MODEL     one model fitted per series.
+  GLOBAL MODEL    one model fitted across many series, sharing
+                  parameters. How deep learning gets enough data, and
+                  how new series get a forecast at all.
+  BACKTEST        evaluating on history by rolling an origin forward.
+
+
+#######################################################################
+PART 3 - WHAT A SERIES IS MADE OF
+#######################################################################
+
+The classical decomposition, and the reason it is still useful is that
+each component has a different driver and a different failure mode:
+
+    y_t  =  TREND  +  SEASONALITY  +  REMAINDER      (additive)
+    y_t  =  TREND  x  SEASONALITY  x  REMAINDER      (multiplicative)
+
+  TREND        slow direction of travel. May be linear, damped, or
+               piecewise with changepoints.
+  SEASONALITY  a pattern that repeats on a FIXED, known period - day of
+               week, month of year. Multiple seasonalities coexist:
+               daily data can carry weekly and yearly cycles at once.
+  CYCLE        a repeating pattern of NON-fixed period, like a business
+               cycle. Different from seasonality; harder; usually
+               ignored in practice.
+  REMAINDER    what is left. Should look like noise. If it does not,
+               there is structure you have not modelled.
+
+ADDITIVE OR MULTIPLICATIVE
+  Additive: the seasonal swing is the same SIZE regardless of level
+  (+200 units every Saturday). Multiplicative: the swing is the same
+  PROPORTION (+15% every Saturday). Growing businesses are almost
+  always multiplicative.
+  The trick: take logs, and multiplicative becomes additive. Most
+  practical work on a growing series happens in log space - but
+  remember that the mean of the log is not the log of the mean, so
+  back-transforming a forecast needs care.
+
+STL DECOMPOSITION
+  Seasonal-Trend decomposition using Loess. Robust, handles changing
+  seasonality, gives you the three components to inspect. Worth running
+  on any new series before modelling, purely to see what you have.
+
+FOURIER TERMS
+  Represent seasonality as sin/cos pairs at the seasonal frequency and
+  its harmonics. Elegant when the period is long (365) or when several
+  seasonalities overlap, where dummy variables would explode. K pairs
+  gives you 2K features and controls how wiggly the seasonal shape is.
+
+
+#######################################################################
+PART 4 - STATIONARITY AND AUTOCORRELATION
+#######################################################################
+
+You need this to read classical methods and to talk to people who grew
+up on them, even if your production model ends up being a GBDT.
+
+STATIONARITY
+  A series is stationary if its statistical properties do not depend on
+  when you look - constant mean, constant variance, autocovariance
+  depending only on the lag. Trends and seasonality both break it.
+  Classical models (ARMA) require it; you get there by DIFFERENCING:
+
+    first difference       y_t - y_{t-1}          removes a linear trend
+    seasonal difference    y_t - y_{t-m}          removes seasonality
+    log then difference    stabilises variance too
+
+  A RANDOM WALK is the canonical non-stationary series - its best
+  forecast is its last value, which is exactly the naive method. Many
+  financial series are close to this, which is why beating naive there
+  is so hard.
+
+  Tests: ADF (null = non-stationary), KPSS (null = stationary). Run
+  both; they disagree in informative ways.
+
+AUTOCORRELATION
+  ACF   correlation of the series with itself at lag k. Peaks at
+        multiples of the seasonal period reveal seasonality.
+  PACF  the same, with the effect of shorter lags removed.
+
+  Reading them for model order:
+      AR(p):  PACF cuts off sharply after lag p, ACF decays
+      MA(q):  ACF  cuts off sharply after lag q, PACF decays
+
+  After fitting anything, plot the ACF of the RESIDUALS. If structure
+  remains, the model has not extracted everything. The Ljung-Box test
+  formalises this.
+
+
+#######################################################################
+PART 5 - THE MODEL LADDER
+#######################################################################
+
+Climb it. Stop as soon as the decision-cost metric stops improving by
+more than the maintenance cost.
+
+  LEVEL 0 - BENCHMARKS (never skip)
+    naive            y_hat = y_{t-1}
+    seasonal naive   y_hat = y_{t-m}        <- THE baseline
+    drift            naive plus the average historical slope
+    mean             the historical average
+  These take one line each and must appear in every results table.
+
+  LEVEL 1 - EXPONENTIAL SMOOTHING
+    SES              weighted average, weights decaying into the past.
+                     Level only.
+    Holt             adds a trend. Damped Holt adds a damping parameter
+                     so the trend flattens out instead of exploding -
+                     damped trend is a very strong default.
+    Holt-Winters     adds seasonality, additive or multiplicative.
+    ETS              the general framework: Error x Trend x Seasonal,
+                     each of which can be None / Additive /
+                     Multiplicative (plus damped). Fitting picks the
+                     combination automatically. Cheap and excellent.
+
+  LEVEL 2 - THETA
+    Simple, won the M3 competition, still competitive. Essentially SES
+    with drift on a decomposed series. Include it as a benchmark.
+
+  LEVEL 3 - ARIMA FAMILY
+    ARIMA(p,d,q)              AR order, differencing, MA order
+    SARIMA(p,d,q)(P,D,Q)_m    the same with seasonal terms
+    SARIMAX                   plus exogenous regressors
+    Strong on short, clean, single-seasonality series. Weak with
+    multiple seasonalities, awkward with many covariates, slow to fit
+    at scale. auto_arima will pick orders for you.
+
+  LEVEL 4 - PROPHET
+    Trend with automatic changepoints, Fourier seasonality, holiday
+    effects, all fitted in a Bayesian framework. Very fast to get
+    something reasonable; handles missing data and holidays gracefully.
+    Honest caveats: it is a curve-fitter, not a time series model in
+    the ARIMA sense; it often loses to a tuned GBDT or even to ETS; its
+    intervals are frequently badly calibrated. Good first cut, rarely
+    the answer.
+
+  LEVEL 5 - REGRESSION / GBDT ON TABULAR FEATURES
+    Reframe as supervised learning (Part 6), then use LightGBM,
+    XGBoost or CatBoost with lag and calendar features. Quantiles come
+    free via pinball loss. Handles many covariates, many series and
+    non-linear interactions. THIS IS THE PRACTICAL WORKHORSE for
+    business data, and it won M5 decisively.
+
+  LEVEL 6 - GLOBAL AND DEEP MODELS
+    DeepAR           probabilistic RNN, global across series
+    N-BEATS/N-HiTS   deep residual stacks, strong on pure series
+    TFT              Temporal Fusion Transformer, handles static and
+                     time-varying covariates, gives attention-based
+                     interpretability
+    PatchTST etc.    transformer variants
+    These need MANY related series or very long histories. One series
+    with a thousand daily points cannot justify them, and saying that
+    plainly is a strength.
+
+  LEVEL 7 - FOUNDATION MODELS
+    Chronos, TimesFM, Moirai, Lag-Llama, TimeGPT: pretrained on large
+    time series corpora, usable zero-shot. Genuinely useful for cold
+    start and for a fast baseline across many series. As of now they do
+    not reliably beat a well-tuned GBDT on business data with strong
+    covariates, so treat them as a strong prior, not a conclusion.
+
+  SPECIAL - INTERMITTENT DEMAND
+    Croston's method, SBA, TSB. See Part 13.
+
+WHAT THE M COMPETITIONS ACTUALLY TAUGHT
+  M3 (2000)  simple methods and combinations beat complex ones
+  M4 (2018)  a hybrid of exponential smoothing and an RNN won;
+             combinations dominated the top of the table
+  M5 (2020)  Walmart retail data - gradient boosted trees dominated,
+             and probabilistic accuracy was scored separately
+  The durable lesson: benchmark honestly, combine models, and do not
+  assume complexity wins.
+
+ENSEMBLING
+  Averaging several reasonable forecasts is one of the most reliable
+  free wins in the field. A simple mean of ETS, ARIMA and GBDT often
+  beats any of them. Do this before reaching for a bigger model.
+
+
+#######################################################################
+PART 6 - REFRAMING AS A SUPERVISED LEARNING PROBLEM
+#######################################################################
+
+The move that lets you use ordinary ML on a time series. Turn the
+series into rows:
+
+    target       y at time t+h
+    features     lags of y, rolling statistics of y, calendar
+                 attributes of t+h, covariates known at origin t
+
+    t      y    lag_7  lag_14  roll_mean_28  dow  is_holiday   y_{t+7}
+    ...
+
+Now it is a regression table and LightGBM will take it.
+
+THE RULES THAT KEEP IT HONEST
+  - Every feature row must be computable using ONLY information
+    available at the origin. Compute rolling statistics with a shift,
+    and never over the full series before splitting.
+  - The lag must be at least h. For a 7-day-ahead forecast, lag_1 does
+    not exist at prediction time. This is the single most common bug in
+    tabular forecasting, and it produces a beautiful backtest and a
+    useless production model.
+  - Keep the row's timestamp so the backtest can split on it.
+
+WHEN THE TABULAR FRAME IS WRONG
+  If there is no history for the entity you are predicting - a brand
+  new product, a show not yet made - there are no lags to build, and
+  the problem is not a time series problem at all. It is cross-sectional
+  regression on metadata and analogues, pooled across entities.
+  Recognising this is worth more than any model choice.
+
+
+#######################################################################
+PART 7 - FEATURES AND THE FORECAST-TIME RULE
+#######################################################################
+
+THE RULE: will I have this value, for every date in the horizon, at the
+moment I produce the forecast? If not, it is leakage.
+
+  KNOWN-FUTURE - safe at any horizon
+    day of week, day of month, week of year, month, quarter
+    holiday and festival flags, WITH LEAD AND LAG WINDOWS - behaviour
+      ramps before a festival and decays after, so a single-day flag
+      captures almost none of the effect
+    moving holidays that shift each year (Diwali, Eid, Easter, Chinese
+      New Year) - these need a maintained calendar table or the model
+      silently breaks the same month every year
+    long weekends and bridge days, which are not the same as holidays
+    school and exam calendars, sports fixtures, published schedules
+    planned promotions, planned price changes, planned marketing
+    payday effects, month-end and quarter-end
+    time index / trend term
+    cyclical encodings: sin and cos of the position in the cycle, so
+      that December is adjacent to January
+
+  PAST-ONLY - safe only at short horizons
+    lags and rolling means, standard deviations, min and max
+    expanding statistics
+    recent level, recent volatility
+    exogenous actuals: weather observed, competitor price observed
+
+  PLANNED BUT UNCERTAIN
+    budgets and launch plans. Usable, but first regress actual on
+    planned historically and look at the spread. A noisy regressor with
+    a confident coefficient is worse than no regressor.
+
+THE HORIZON DETERMINES THE FEATURE SET
+  At h = 1 to 14, lags carry most of the signal.
+  At h = 90, there is no recent observation to lag from, and the model
+  is essentially a calendar-and-covariates regression with a trend.
+  Two horizon regimes usually means two configurations of one pipeline,
+  not one model pretending to serve both.
+
+
+#######################################################################
+PART 8 - MULTI-STEP: DIRECT VERSUS RECURSIVE
+#######################################################################
+
+  RECURSIVE (iterative)
+    Train one model for h=1. Predict, feed the prediction back in as a
+    lag, predict again. Simple, one model. Errors COMPOUND, and the
+    model is being fed its own guesses as if they were observations.
+    Fine for short horizons, bad past a couple of seasonal cycles.
+
+  DIRECT
+    Train a separate model per horizon, or one model with the horizon
+    as a feature, each mapping from information-at-origin to y_{t+h}.
+    No compounding. More models to maintain, and it cannot exploit the
+    sequential structure between steps.
+
+  MULTI-OUTPUT
+    One model emitting the whole horizon vector at once. Native to the
+    deep models.
+
+  Default: recursive for short, direct for long. Say which you chose
+  and why; it is a real design decision, not a detail.
+
+
+#######################################################################
+PART 9 - BACKTESTING
+#######################################################################
+
+The one rule: BACKTEST THE WAY YOU WILL FORECAST. Same origin spacing,
+same horizon, same information cutoff as production. Anything else
+measures a system you are not going to run.
+
+ROLLING-ORIGIN EVALUATION (time series cross-validation, walk-forward)
+
+    train ---------|  test h
+    train -------------|  test h
+    train -----------------|  test h
+                    origins advance
+
+  EXPANDING WINDOW (anchored)   training set grows. Use when the whole
+                                history is relevant.
+  SLIDING WINDOW (unanchored)   fixed-length training window that moves.
+                                Use when the regime changes and old data
+                                misleads.
+
+  ORIGIN SPACING must match the decision cadence. If you declare a
+  number on the 1st of each month, your origins are the 1st of each
+  month - which over three years gives you about 36 evaluation points.
+  Knowing how few origins you have is itself a finding: it limits how
+  confidently you can pick between models.
+
+  GAP / EMBARGO. If a feature uses a window that straddles the split,
+  or if the label needs time to settle, insert a gap between train and
+  test so nothing leaks across.
+
+  DATA SETTLEMENT. If recent partitions are still being revised, the
+  backtest must use the data AS IT LOOKED at the origin, not as it
+  looks now. Otherwise production sees worse inputs than the backtest
+  did and underperforms for reasons nobody can find.
+
+COMPARING TWO MODELS
+  With 30-odd origins you are working with a small sample. Use the
+  Diebold-Mariano test, or a block bootstrap over origins, before
+  declaring a winner. A raw mean difference over 30 points will pick
+  noise and you will defend it for a year.
+
+
+#######################################################################
+PART 10 - METRICS
+#######################################################################
+
+SCALE-DEPENDENT (comparable only within one series)
+  MAE    mean absolute error. Optimised by the MEDIAN.
+  RMSE   root mean squared error. Optimised by the MEAN. Punishes large
+         errors harder; sensitive to outliers.
+  Choosing between them is already a statement about what you want.
+
+PERCENTAGE
+  MAPE   mean absolute percentage error. Popular and flawed:
+           - undefined and explosive as the actual approaches zero
+           - an under-forecast's error is capped at 100% while an
+             over-forecast is unbounded, so minimising MAPE
+             systematically biases the forecast LOW
+           - meaningless on series that cross zero
+  sMAPE  the "symmetric" fix, which is not actually symmetric and is
+         unstable near zero. Used in competitions; avoid in production.
+
+SCALED - the good ones
+  MASE   mean absolute error divided by the in-sample MAE of the
+         seasonal naive forecast.
+           MASE < 1  means better than seasonal naive
+           MASE = 1  means you built seasonal naive the hard way
+         Scale free, comparable across series, undefined only for a
+         flat series, and it answers the question you actually care
+         about. Prefer it as the point-accuracy metric.
+  RMSSE  the squared analogue, used in M5.
+
+PROBABILISTIC
+  PINBALL (quantile) LOSS  for a target quantile tau:
+           (y - yhat) * tau        if y >= yhat   (under-forecast)
+           (yhat - y) * (1 - tau)  if y <  yhat   (over-forecast)
+         Minimised exactly at the tau-quantile. This is both the metric
+         AND the training loss for quantile models.
+  CRPS   continuous ranked probability score - the integral of pinball
+         loss across all quantiles. One number for a whole predictive
+         distribution.
+  COVERAGE / CALIBRATION  over the backtest, is the 90% interval
+         actually containing the truth about 90% of the time? An
+         uncalibrated interval is worse than none, because it gets
+         acted on.
+
+THE METRIC THAT OUTRANKS ALL OF THEM
+  DECISION COST. Replay the real decision over the backtest and price
+  it in money, under each candidate model AND under the incumbent -
+  including the incumbent human with a spreadsheet, which is a model
+  and deserves a row in the table. "This saves Rs X a year" is the only
+  metric a business can argue with, and the only one that can tell you
+  a more accurate model is not worth shipping.
+
+
+#######################################################################
+PART 11 - PROBABILISTIC FORECASTING AND PICKING THE QUANTILE
+#######################################################################
+
+WHY: the decision is asymmetric. Running out costs something different
+from having too much. The mean is optimal only when the two costs are
+equal, which is almost never.
+
+HOW TO GET A DISTRIBUTION
+  - empirical residual quantiles from the backtest, per horizon
+    (errors grow with h, so the interval must widen with h)
+  - quantile regression / GBDT trained with pinball loss at each
+    quantile you need
+  - parametric intervals from a statistical model (ETS, ARIMA) - easy,
+    but they assume a distribution and are usually too narrow
+  - simulation: sample paths forward from a generative model
+  - bootstrapping residuals
+  - conformal prediction, adapted for the non-exchangeable case
+    (EnbPI, adaptive conformal inference) - gives coverage guarantees
+    with weak assumptions
+
+  Watch for quantile crossing when you fit quantiles independently -
+  the P90 can come out below the P80. Sort, or fit jointly.
+
+PICKING THE QUANTILE - THE NEWSVENDOR / CRITICAL FRACTILE
+
+  Let Cu be the cost of being ONE UNIT SHORT and Co the cost of being
+  ONE UNIT LONG. The optimal service level is
+
+                        Cu
+        tau*  =  ---------------
+                    Cu  +  Co
+
+  and you forecast the tau* quantile.
+
+  Worked, from case 01: commit capacity at Rs 1.60/GB, overage billed
+  at Rs 3.52/GB, unused commitment not refunded.
+      being short one GB costs the premium   3.52 - 1.60 = 1.92
+      being long one GB costs the waste                  = 1.60
+      tau* = 1.92 / (1.92 + 1.60) = 0.545   ->  commit the P55
+
+  The counterintuitive part, and the reason this is worth memorising:
+  a penalty multiplier of 2.2x lands you barely above the median, not
+  far out in the tail. Meanwhile a decision where running short costs
+  retention or safety can easily give Cu/Co of 50:1, which is P98.
+  SAME SERIES, OPPOSITE POSTURES. If one number is serving two such
+  decisions, it is failing at both.
+
+  Caveats: the formula assumes linear costs on both sides and no
+  salvage value. Contracts with minimum commitments, tiered rates or
+  true-ups need the expected-cost curve computed directly.
+
+THIS GENERALISES FAR BEYOND FORECASTING
+  Any threshold choice is this calculation: fraud block cutoffs,
+  moderation auto-remove thresholds, inventory levels, staffing,
+  alerting. Whenever you are about to pick a threshold by eye or report
+  a mean, ask what the two errors cost.
+
+
+#######################################################################
+PART 12 - HIERARCHIES AND RECONCILIATION
+#######################################################################
+
+Forecasts are usually consumed at several levels at once - SKU,
+category, region, national - and the levels must ADD UP. Independent
+forecasts will not.
+
+  BOTTOM-UP     forecast the leaves, sum upward. Coherent by
+                construction. Suffers when the leaves are noisy or
+                intermittent.
+  TOP-DOWN      forecast the total, split by historical proportions.
+                Stable at the top, loses leaf-level signal, and the
+                proportions themselves drift.
+  MIDDLE-OUT    forecast a middle level, aggregate up and split down.
+  OPTIMAL RECONCILIATION (MinT and relatives)
+                forecast every level independently, then project the
+                whole vector onto the coherent subspace, weighting by
+                the forecast error covariance. Usually the best
+                accuracy, and it lets each level use whatever model
+                suits it.
+
+  NON-NESTED HIERARCHIES. Real hierarchies often overlap rather than
+  nest - age x city x genre, where a row belongs to several groupings
+  at once. These are "grouped" rather than strictly hierarchical
+  structures and reconciliation still applies, but the constraint
+  matrix is bigger and top-down is not even definable.
+
+  AGGREGATION HELPS ACCURACY. A total is nearly always easier to
+  forecast than its parts, because idiosyncratic noise cancels. If the
+  decision only needs the total, do not forecast the parts.
+
+
+#######################################################################
+PART 13 - THE HARD CASES
+#######################################################################
+
+INTERMITTENT AND LUMPY DEMAND
+  Series that are mostly zeros with occasional spikes - spare parts,
+  long-tail SKUs, small sellers. The mean is meaningless: a forecast of
+  0.3 units is never a possible outcome.
+    Croston's method  decompose into demand SIZE and the INTERVAL
+                      between demands, smooth each separately
+    SBA               corrects Croston's known upward bias
+    TSB               updates the PROBABILITY of demand rather than the
+                      interval, so it handles items going obsolete
+    Better still      forecast the full distribution, or model
+                      p(demand occurs) x size | occurs, and let the
+                      decision read the quantile it needs
+
+COLD START - NO HISTORY
+  A new product, a new store, a show not yet made. Options, in order:
+    - a global model pooled across similar series, so the new one
+      inherits the shared shape
+    - cross-sectional regression on metadata and analogues (the series
+      framing is simply wrong here)
+    - a matched-analogue average from similar launched items
+    - a foundation model zero-shot, as a prior
+    - a hand-set ramp curve from the last N launches
+
+STRUCTURAL BREAKS AND CHANGEPOINTS
+  A permanent shift in the process: a relaunch, a pricing change, a
+  large customer signing or leaving, a pandemic. A model that assumes
+  stationarity will average across the break and be wrong on both
+  sides.
+    - detect: PELT, Bayesian online changepoint detection, Prophet's
+      automatic changepoints, or just plotting the series
+    - handle: truncate training to post-break, add a level-shift
+      regressor, or shorten the training window
+    - decide deliberately whether a shift is PERMANENT (level change,
+      keep it) or a PULSE (one-off, flag it as an event so the trend
+      does not absorb it)
+
+OUTLIERS
+  Distinguish two kinds and treat them differently:
+    - a measurement artefact or a record of your own downtime: mask it,
+      do not let the model learn that mid-March is quiet
+    - a real but exceptional event: keep it and model it with an event
+      flag, so the pattern is available next time it recurs
+
+CENSORED DEMAND
+  You observe SALES, not demand. If you stocked out, or were capacity
+  constrained, the history records what you could serve, not what was
+  wanted. Train on it naively and you under-build forever, and the
+  metric looks fine every time because you predicted your own ceiling
+  correctly. Flag constrained periods; exclude or correct them.
+
+THE SELF-INFLUENCING FORECAST
+  The forecast changes the outcome it predicts. A high demand forecast
+  earns a product more promotion, which makes the forecast come true. A
+  churn model that triggers a save-offer destroys its own accuracy when
+  it works. Accuracy is then the wrong success metric; measure the
+  decision, not the prediction.
+
+MISSING AND IRREGULAR DATA
+  Gaps, irregular sampling, timezone and daylight-saving shifts,
+  leap years, weeks that do not align with months. Decide explicitly
+  whether a missing value is a zero or an unknown - they are completely
+  different and confusing them is common.
+
+
+#######################################################################
+PART 14 - PRODUCTION
+#######################################################################
+
+A forecasting system is a batch pipeline. Almost nothing here is a
+latency problem, and the design should look boring.
+
+    source data -> settled partitions -> feature build (calendar table,
+    covariate tables) -> scheduled retrain -> forecast job (all
+    horizons, all quantiles) -> forecast table -> consumers
+
+  RETRAIN CADENCE. Schedule-based (weekly is common), drift-triggered,
+  or performance-triggered. Note that label delay caps how fast you can
+  possibly retrain.
+  VINTAGING. Write every forecast with the origin it was made from and
+  the model version that made it. You cannot evaluate, debug or defend
+  what you overwrote, and it cannot be retrofitted.
+  HUMAN OVERRIDE. For large irreversible commitments the system
+  recommends and a named person approves. Log every override with its
+  reason - overrides are labelled data about what the model is missing.
+  FALLBACK. If the job fails, serve the previous run, then seasonal
+  naive. A capacity or ordering system cannot accept a null.
+  MONITORING:
+    rolling accuracy against the backtest expectation
+    realised coverage of each published quantile
+    input freshness and completeness guards before the job runs
+    calendar table health - an alert if a forecast date is near a
+      known festival with no calendar entry
+    any ratio you converted through, monitored as its own series
+
+
+#######################################################################
+PART 15 - FAILURE MODES TO HAVE READY
+#######################################################################
+
+  RANDOM SPLIT              trained on the future, unreproducible score
+  LAG SHORTER THAN HORIZON  beautiful backtest, useless in production
+  NO BASELINE               nobody can tell whether the model is good
+  MAPE AS HEADLINE          systematically biases the forecast low
+  POINT FORECAST FOR AN ASYMMETRIC DECISION
+  RECURSIVE OVER A LONG HORIZON      compounding error
+  UNSETTLED RECENT DATA     a phantom downtrend at the end of every
+                            series, learned as real
+  OUTAGE TREATED AS DEMAND  the model learns your downtime
+  CALENDAR ROT              moving holidays with an unmaintained table;
+                            breaks the same month every year
+  RATIO DRIFT               forecast the proxy, convert through a ratio
+                            that has moved, be wrong invisibly
+  CENSORED HISTORY          forecast your own ceiling forever
+  OVER-GRANULAR             forecasting per SKU per hour when the
+                            decision is monthly and national
+  NO VINTAGING              cannot answer "what did we say in March"
+  INTERVALS THAT ARE TOO NARROW      acted on, and wrong
+
+
+#######################################################################
+HOW THIS CONNECTS TO THE REST OF THE REPO
+#######################################################################
+
+  - The newsvendor fractile in Part 11 is the same tool that sets a
+    fraud block threshold, a moderation auto-remove cutoff, an
+    inventory level and a staffing target. It is the most portable
+    idea in this folder.
+  - "Beat seasonal naive or do not ship" is the same discipline as
+    "beat BM25" in search/ and "beat the popularity baseline" in
+    recommendation/.
+  - Censored demand here is the same shape as the popularity feedback
+    loop in recommendation/ and position bias in search/: the system's
+    own past behaviour limits what the data can teach it.
+  - Decision cost as the headline metric is the antidote to the
+    Goodhart failure that runs through the RCA repo.
+
+
+WHAT TO DRILL NEXT
+------------------
+Read forecasting_case_01_core.txt, which is this material compressed to
+five moves on one decision. Then forecasting_case_01.txt for the same
+problem with realistic mess. _scope.txt lists cases 02 to 05.
+
+
+
+
+

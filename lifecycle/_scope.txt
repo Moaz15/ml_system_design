@@ -26,6 +26,30 @@ are routinely skipped by candidates, and both decide the whole design.
 
 CANDIDATE CASES
 ---------------
-  01  Subscription churn prediction and the retention offer it drives.
+  01  SUBSCRIPTION RENEWAL AND THE DISCOUNT THAT PAYS          HARD
+      WRITTEN -> churn_prediction/  (five files, start at _index.txt)
+      Subscription churn prediction and the retention offer it drives.
+      Decide, for each subscriber reaching the end of a billing cycle,
+      whether to intervene and at what discount depth, under a fixed
+      margin budget.
+      Drills the whole folder skill at once: a label defined by a
+      window you chose (renewed within [T, T+3]), a prediction that is
+      worthless without the action attached to it, uplift over
+      propensity, and the self-defeating prophecy that makes accuracy
+      the wrong success metric.
+      The trap: ranking by P(lapse) and spending the budget on Lost
+      Causes, Sure Things and Sleeping Dogs, while reporting a strong
+      AUC and a strong renewal rate among treated users.
+      Second trap, for whoever avoids the first: fitting the uplift
+      model on observational history in which every discount was
+      assigned by a risk rule, so depth and risk are the same variable.
+
   02  Free-to-paid conversion propensity with a 14-day trial.
   03  Discount targeting: uplift modelling under a fixed budget.
+      Note the overlap with 01 - keep the pure budget-constrained
+      uplift drill here, and let 01 carry propensity-plus-action, so
+      the "propensity is the wrong target" reveal lands once.
+
+  Case files for a single case may live in a sub-folder when the case
+  is carried across several files, as 01 is. Flat
+  <domain>_case_NN.txt files remain the default.

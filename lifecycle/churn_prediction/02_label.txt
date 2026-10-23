@@ -1,0 +1,240 @@
+CASE 01 - LABEL AND DATA
+========================
+The hard part, and the part that is routinely skipped. Everything in
+03_modelling.txt is ordinary supervised learning once this file is
+settled; nothing in it is recoverable if this file is wrong.
+
+
+#######################################################################
+1. UNIT OF ANALYSIS
+#######################################################################
+
+ONE ROW = ONE (user_id, cycle_id). Not one user.
+
+A subscriber on twelve monthly cycles contributes twelve rows over a
+year, each with its own features, its own assignment and its own
+outcome. This is the first thing to say and it is load-bearing:
+
+  - the decision repeats every cycle, so the training row has to be
+    the decision, not the person
+  - tenure becomes a feature rather than a filter, which is what lets
+    the model learn that cycle 1-to-2 churn is a different process from
+    cycle 11-to-12 churn
+  - the same user appears many times, so any split that shuffles rows
+    at random puts the same person on both sides of it. Split by USER
+    and by TIME, never by row
+  - a user who lapses stops producing rows, which is censoring, and it
+    means the population being scored each month is not a fixed cohort
+
+The alternative framing - one row per user, label "churned in the next
+90 days" - is the framing that makes the model unusable, because there
+is no single moment at which it is acted on.
+
+
+#######################################################################
+2. THE CYCLE TIMELINE
+#######################################################################
+
+Call T the renewal date. Everything hangs off it.
+
+  TIME   EVENT
+  -------------------------------------------------------------------
+  T-14   cycle enters the scoring window. Features start being
+         watched. No intervention yet, deliberately - contacting
+         someone two weeks early is the cleanest way to create a
+         Sleeping Dog out of a passive auto-renewer
+  T-7    FEATURE SNAPSHOT IS FROZEN. Score the models, run the
+         optimiser, assign an arm or the holdout, write the assignment
+         to the log
+  T-3    deliver the offer, with an expiry set before T so it cannot
+         leak into the next cycle
+  T      renewal attempt - charge succeeds, charge fails, or the user
+         has already cancelled
+  T+3    dunning retry window closes. THE LABEL IS FINALISED HERE
+  T+g    the row joins the training set, carrying its logged
+         assignment with it
+
+  The label window is a CHOICE, and this one is defensible rather than
+  correct: renewed within [T, T+3]. Choosing T instead of T+3 would
+  label every retryable card failure as churn and train the model to
+  predict payment infrastructure. Choosing T+30 would be cleaner
+  commercially but would mean waiting a month longer for every label
+  and would quietly absorb win-back campaigns into the renewal label.
+
+  Say the window out loud, say what it includes, say what it excludes.
+  That is the lifecycle skill in one move.
+
+
+#######################################################################
+3. THE LEAKAGE RULE, IN ONE SENTENCE
+#######################################################################
+
+NOTHING THAT HAPPENS BETWEEN T-7 AND T MAY ENTER THE FEATURE SET.
+
+The obvious violations are easy. The ones that actually ship are:
+
+  - "days_since_last_session" recomputed at training time from the
+    current date rather than reconstructed as of T-7
+  - a cancellation-intent flag written by the app at T-2, which is a
+    near-perfect predictor and is unavailable at decision time
+  - any aggregate built from a table that is overwritten in place
+    rather than partitioned by date, so last month's value has been
+    silently replaced by this month's
+  - offer-response features from THIS cycle's offer, which is the
+    treatment itself
+
+The structural defence is a point-in-time join against daily
+partitions, with one transform codebase feeding both the offline table
+and the online store. Two codebases means train-serve skew, and skew
+in a system whose output is spent as money is expensive rather than
+embarrassing.
+
+
+#######################################################################
+4. FEATURES AT THE T-7 SNAPSHOT
+#######################################################################
+
+  GROUP        FEATURE                      EXAMPLE   WHY IT MATTERS
+  -------------------------------------------------------------------
+  Plan         plan_price                   299       the revenue at
+                                                      stake
+               plan_type                    monthly   annual plans
+                                                      behave
+                                                      differently
+               tenure_cycles                7         cycle 1-2 churn
+                                                      is a different
+                                                      process
+  Consumption  minutes_30d                  412       the single
+                                                      strongest
+                                                      renewal signal
+               active_days_30d              14        habit, not a
+                                                      binge
+               sessions_30d                 23
+               distinct_shows_30d           6         breadth of use
+  Trend        minutes_ratio_30d_vs_prev    0.61      DECAYING USAGE
+                                                      is the real
+                                                      churn signal,
+                                                      not low usage
+               days_since_last_session      9
+  Content      top_genre                    thriller
+               pct_premium_consumed         0.74      is the paywall
+                                                      what they are
+                                                      paying for
+  Payment      autopay_active               1         passive renewal
+                                                      vs an active
+                                                      decision
+               payment_failures_3c          0         involuntary
+                                                      churn is a
+                                                      different
+                                                      problem
+               card_expiry_within_30d       0
+  Price        discount_last_cycle          0.20      ANCHORING - a
+  history                                             prior discount
+                                                      raises the
+                                                      expectation
+               avg_discount_3c              0.10
+  Offer        offers_received_lifetime     3         fatigue
+  exposure     days_since_last_offer        64
+               past_offer_redeemed          1
+  Context      acquisition_channel          organic
+               city_tier                    tier-2
+               device                       android
+               language                     hindi
+
+Two of these groups are there because of the system itself rather than
+because of the user, and they are the ones a candidate usually misses.
+
+PRICE HISTORY exists because the policy creates it. Discount someone
+once and you have moved their reference price; the next cycle's
+decision is being made by a different person from the one you modelled.
+Without discount_last_cycle in the feature set, the model cannot
+represent that, and the policy will keep re-discounting the same people
+while believing each cycle is independent.
+
+OFFER EXPOSURE exists for the same reason. Contact frequency is a
+feature of the treatment history, not of the user, and leaving it out
+makes fatigue invisible.
+
+
+#######################################################################
+5. THE COLUMNS THAT ARE NOT FEATURES
+#######################################################################
+
+These four define the experiment. They are not inputs to the model and
+they are not outputs of it.
+
+  COLUMN             VALUES                      WRITTEN WHEN
+  -------------------------------------------------------------------
+  assigned_arm       control / d10 / d20 / d30   T-7, by the
+                                                 randomiser
+  delivered          0 / 1                       T-3
+  renewed            0 / 1                       T+3 (the label)
+  revenue_realised   0 or plan_price * (1-d)     T+3
+
+assigned_arm is written at assignment time, not at delivery time, and
+the distinction matters. Analysis is done on ASSIGNMENT, not on
+delivery: if you analyse only the users who received the push, you have
+conditioned on a post-treatment variable - whether the push landed -
+which is itself correlated with being an engaged user, and the estimate
+is broken. Intention to treat, always.
+
+delivered is kept anyway, because the gap between assigned and
+delivered is a real operational metric and because a collapsing
+delivery rate is the first symptom of a broken channel.
+
+
+#######################################################################
+6. WHAT THE TRAINING TABLE LOOKS LIKE
+#######################################################################
+
+  user    cycle  minutes_30d  tenure  autopay  arm      renewed  rev
+  -------------------------------------------------------------------
+  u_101   c_07   412          7       1        control  1        299
+  u_102   c_02   38           2       0        d20      1        239
+  u_103   c_11   190          11      1        d20      0        0
+  u_104   c_03   95           3       0        control  0        0
+
+THE arm COLUMN IS THE WHOLE ASSET.
+
+Delete it and the table still trains a perfectly good churn model:
+renewed regressed on features, decent AUC, ships in a week. What it can
+never tell you is what an offer DID, because every treated row is
+confounded by whatever process decided to treat it.
+
+This is the sentence to put on the whiteboard: without randomised arms,
+the data tells you who churns and never what the offer changed. The
+project's real output in its first phase is that column, not a model.
+
+
+#######################################################################
+7. VOLUME, IMBALANCE, AND WHETHER THERE IS ENOUGH DATA
+#######################################################################
+
+At 2.5M renewal decisions a month the propensity side is
+over-provisioned: the label is roughly balanced, around 40 to 60, and a
+month of data is more than enough to fit mu_0 well.
+
+The uplift side is not, and the arithmetic deserves saying:
+
+  - estimating a DIFFERENCE between two groups needs far more sample
+    than estimating a level within one
+  - a realistic effect is a few percentage points on a base of roughly
+    0.4. Detecting 3pp at 80% power needs on the order of a few tens of
+    thousands of users per arm
+  - four arms (control, d10, d20, d30) multiply that, and any
+    segmentation of the result multiplies it again
+  - so a randomised slice of a few percent of 2.5M monthly decisions
+    gives a usable uplift model in roughly one to two months of
+    accumulation, not one week
+
+State that explicitly, because the timeline in 04_system.txt is set by
+it rather than by engineering effort.
+
+One more number that changes the design: the share of non-renewals that
+are INVOLUNTARY - dead card, revoked mandate, insufficient balance. If
+that is 10% of lapses it is a footnote. If it is 30%, the single
+highest-return month of work in this whole project is dunning and
+mandate repair, and it should be carved out and handed to someone
+before any model is trained. A discount does not fix a dead card, and
+mixing the two populations means the model learns payment plumbing and
+calls it intent.

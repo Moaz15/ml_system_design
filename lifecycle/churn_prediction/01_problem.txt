@@ -1,0 +1,168 @@
+CASE 01 - PROBLEM: Subscription Renewal and the Discount That Pays
+==================================================================
+CONTEXT
+-------
+A subscription audio-content app in India. Long-form spoken content:
+audiobooks, serialised fiction, regional-language originals. Revenue is
+recurring - every billing cycle ends in a renewal or a lapse.
+
+  - 2.5M renewal decisions a month
+  - headline plan Rs 299/month; a long-tenure plan at about Rs 108 per
+    cycle; annual plans are a separate population
+  - renewal rate 35-50% depending on cohort, plan and tenure. It is not
+    one number and should not be modelled as one
+  - about 60% of the base is on autopay; the rest renew by an explicit
+    action every cycle
+  - three years of billing history at cycle grain, app events at
+    session grain
+  - payment failures and dunning retries account for a real slice of
+    non-renewal, and that slice is a different problem
+
+
+THE TWO LEVERS, AND WHY THEY FIGHT
+----------------------------------
+At each renewal the business controls exactly two things: RENEWAL
+PROBABILITY and EFFECTIVE PRICE. A discount raises the first and lowers
+the second.
+
+    maximise renewal rate  ->  discount everybody, margin collapses
+    maximise price         ->  discount nobody, the fence-sitters leave
+
+So the objective is EXPECTED REVENUE PER SUBSCRIBER. Renewal rate is
+not the objective, and a policy that lowers it while raising revenue
+per subscriber is a good policy. Someone in the room will have to be
+told that out loud.
+
+
+WHAT EXISTS TODAY
+-----------------
+A CRM rule: listening in the last 30 days below a hand-set threshold
+gets a blanket 20% off, pushed three days before renewal. The threshold
+was set by a PM eighteen months ago and has not moved.
+
+No holdout. Everyone who trips the rule gets the offer, so nobody can
+say what the rule is worth. The dashboard reports that offer recipients
+renew well, which is selection, not effect.
+
+THE FACT THE CASE TURNS ON: every discount in three years came from
+that rule, so discount depth is collinear with being at risk. Nowhere
+in the history did a randomly chosen subscriber get a randomly chosen
+depth.
+
+
+DATA
+----
+  - the billing ledger is clean and authoritative: attempted,
+    succeeded, failed, mandate revoked, user cancelled
+  - app events settle over about 48 hours, which is fine for 30-day
+    aggregates and matters for the snapshot timing in 02_label.txt
+  - the CRM logs offers SENT, inconsistently, plus redemptions. It does
+    not log who was considered and skipped, so even the historical
+    treatment assignment is only half recorded
+
+WHY THIS IS ON YOUR DESK NOW
+----------------------------
+Finance wants the discount budget justified or cut. Growth wants a
+churn model, because that is the thing people ask for. These are not
+the same request, and the second does not answer the first.
+
+YOUR ROLE
+---------
+Senior IC, or a lead with one engineer and one analyst. You own the
+design, the sequencing, and the argument about what not to build.
+
+QUESTION
+--------
+"We want to reduce subscription churn. Design a churn prediction system
+that tells us who is going to cancel, so we can send them a retention
+offer."
+
+Take the question as asked, then say whether it is the right one.
+
+
+#######################################################################
+WHICH PROJECT IS THIS
+#######################################################################
+
+The three readings share a dataset and share nothing else.
+
+  READING                OUTPUT                 VERDICT
+  -------------------------------------------------------------------
+  A churn propensity     P(lapse) per user      a score alone drives
+                                                no decision
+  B price sensitivity    renewal curve against  pricing work, and
+                         discount depth         half the answer
+  C uplift-targeted      a treat / no-treat     RECOMMENDED - it
+    offer                policy with a depth    contains A and B
+
+C, with B's price-response curve inside it and A demoted to an
+eligibility filter and a monitoring series. Saying this in the first
+three minutes IS the case. Everything after it is execution.
+
+THE DECISION, STATED AS A DECISION
+#######################################################################
+
+    For each subscriber approaching the end of a billing cycle, decide
+    whether to intervene, with what offer, at what discount depth,
+    automatically, at scale, within a fixed margin budget.
+
+Success is not AUC. Success is INCREMENTAL RETAINED REVENUE PER RUPEE
+OF DISCOUNT SPENT, measured against a randomised holdout.
+
+Four properties of that decision drive the whole design:
+
+  - it is per (user, cycle), not per user
+  - the renewal date is known weeks ahead, so nothing here needs
+    real-time inference
+  - the budget is fixed, so this is an allocation problem and the
+    output is a RANKING, not independent yes/no calls
+  - the offer is irreversible: it moves the user's reference price, and
+    that cost lands in the NEXT cycle rather than this one
+
+
+CLARIFYING QUESTIONS  (* = changes the answer entirely)
+#######################################################################
+
+  Q1 *  Any historical randomisation at all - an A/B, a holdout, a
+        period with the rule switched off? With it, an uplift model
+        fits in week three. Without it, phase one is not modelling, it
+        is buying identification with deliberately randomised spend,
+        and the timeline doubles.
+
+  Q2    What is the discount budget, per month, in rupees? Without it
+        there is no allocation problem and no stopping rule.
+
+  Q3 *  May we leave a group untreated permanently? An always-on
+        holdout is the only honest measurement of the channel, and it
+        costs real retained revenue every month. If the answer is no,
+        say plainly that the system can be built but never evaluated,
+        and let the budget holder own that trade.
+
+  Q4    Price discount only, or also content, a free extension, a plan
+        downgrade? Each extra arm multiplies the sample needed.
+
+  Q5    How much of churn is INVOLUNTARY - dead card, revoked mandate,
+        insufficient balance? A discount does not fix a dead card. At
+        30% of lapses, the highest-return month of work is dunning and
+        mandate repair, not a model.
+
+
+#######################################################################
+THE TWO TRAPS
+#######################################################################
+
+1. Rank by P(lapse), send offers down the ranking until the budget is
+   gone, report a strong AUC and a strong renewal rate among treated
+   users. That policy spends most of the budget on the people least
+   likely to move, pays people who would have renewed anyway, and
+   reminds passive auto-renewers that they are paying. None of it is
+   visible in AUC, because AUC scores an outcome and the business is
+   buying a CHANGE in that outcome.
+
+2. For whoever avoids the first: fit the uplift model on the
+   observational history. Depth and risk are the same variable there,
+   so the model learns - confidently - that discounts cause churn, and
+   ends up measuring the rule rather than the offer.
+
+The four segments behind trap 1, and why suppression is arithmetic
+rather than a rule: _index.txt.

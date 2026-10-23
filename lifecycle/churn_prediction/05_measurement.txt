@@ -1,0 +1,238 @@
+CASE 01 - MEASUREMENT, NUMBERS AND THE 60-SECOND VERSION
+========================================================
+The part the project is actually judged on. A churn model is judged on
+AUC; this system cannot be, and what replaces it has to be stated
+before anything launches.
+
+
+#######################################################################
+1. THE METRIC STACK
+#######################################################################
+
+  METRIC                      WHAT IT ANSWERS
+  -------------------------------------------------------------------
+  Qini / AUUC                 does ranking by tau beat random
+                              targeting, at every budget level
+  Incremental revenue per     THE PRIMARY BUSINESS METRIC, and the
+  rupee of discount spent     only number the budget holder is shown
+  Calibration of mu_0         is the baseline probability
+                              trustworthy - it sets the price term,
+                              so a mis-calibrated mu_0 mis-ranks the
+                              entire allocation
+  Guardrails                  ARPU, gross margin, unsubscribe rate,
+                              complaint rate, notification opt-out
+                              rate
+
+Primary offline metric: Qini. Primary online metric: incremental
+revenue per rupee of discount. Not renewal rate, at any point, in
+either place.
+
+
+#######################################################################
+2. QINI, IN ONE PARAGRAPH
+#######################################################################
+
+Sort the holdout by predicted tau. Walk down that list, and at each
+point plot cumulative INCREMENTAL renewals - treated renewals minus
+control renewals, scaled for the group size difference - against the
+share of the population targeted.
+
+A diagonal line means the model is worthless: targeting the top decile
+by tau is no better than targeting a random decile. A steep early rise
+means the Persuadables really are at the top of the ranking, which is
+the only claim this project makes. A curve that rises and then FALLS
+means the tail of the ranking contains negative uplift - Sleeping Dogs
+- and the falling point tells you exactly where the policy should stop
+treating, independent of budget.
+
+AUUC is the area under that curve, used for comparing model versions.
+Report the curve, not the scalar, because the shape carries the
+decision and the scalar does not.
+
+The right way to read it: the Qini curve IS the budget allocation
+question, drawn. Any budget corresponds to a point on the x-axis, and
+the curve says what that budget buys.
+
+
+#######################################################################
+3. THE ALWAYS-ON HOLDOUT
+#######################################################################
+
+A permanently untreated slice, randomised at (user, cycle) assignment,
+with no contact of any kind through this channel.
+
+It costs real money every month - those are renewals not saved - and
+it is the only thing in the system that can answer "is the whole
+channel worth anything". Without it, every reported number is the
+treated group's renewal rate, which is selection, not effect.
+
+Three design points worth stating:
+
+  - randomise at assignment (T-7), and analyse on ASSIGNMENT, not on
+    delivery. Conditioning on whether the push landed conditions on a
+    post-treatment variable correlated with engagement
+  - hold the slice out at the USER level across cycles, not
+    independently per cycle, or the long-run anchoring and fatigue
+    effects leak between arms and the holdout stops being clean
+  - size it from the effect you need to detect, and say the number: a
+    few percentage points on a base around 0.4 needs tens of
+    thousands of users per arm, which at 2.5M monthly decisions is a
+    small single-digit percentage
+
+The question to ask the business in week one, from 01_problem.txt Q3:
+are we allowed to leave a group untreated permanently? If the answer
+is no, the system can still be built, but it can never be evaluated,
+and that trade-off belongs to whoever owns the budget rather than to
+the person building the model.
+
+
+#######################################################################
+4. THE COMPARISON THAT SETTLES THE ARGUMENT
+#######################################################################
+
+Three policies, scored on the same holdout, at the same time:
+
+  POLICY                    DISCOUNT    RENEWAL   REVENUE PER
+                            SPEND       RATE      SUBSCRIBER
+  -------------------------------------------------------------------
+  No offer at all           zero        baseline  baseline
+  Blanket 20% to everyone   high        HIGHEST   LOWER - margin
+  flagged at risk                                 burned on Sure
+  (the incumbent rule)                            Things
+  Uplift-targeted           LOW         middle    HIGHEST
+
+The headline claim is the third row beating the second AT LOWER SPEND.
+
+The row that has to be defended in the room is the renewal rate column:
+the targeted policy renews FEWER people than blanket discounting. That
+is not a regression. It is the margin being kept - the renewals given
+up are the ones that were being bought back at a price higher than they
+were worth. Expect this to be the hardest sentence in the review, and
+have the per-subscriber revenue number ready before saying it.
+
+
+#######################################################################
+5. BREAK-EVEN: WHY NOT JUST DISCOUNT HARDER
+#######################################################################
+
+The minimum uplift that makes a given depth pay for itself:
+
+    required tau  =  p0 * d / (1 - 2d)
+
+where p0 is the baseline renewal probability and d the depth.
+
+  BASELINE RENEWAL    10% OFF     20% OFF     30% OFF
+  -------------------------------------------------------------------
+  0.35                4.4 pp      11.7 pp     26.2 pp
+  0.50                6.2 pp      16.7 pp     37.5 pp
+
+Read the bottom-right cell. At a 50% baseline, a 30% discount has to
+move renewal by 37.5 percentage points before it breaks even. Effects
+that large do not exist in this population.
+
+This is the cleanest available answer to "why not just discount
+harder", and it explains two things that otherwise look like modelling
+artefacts: why the optimiser almost never selects the deepest depth,
+and why the realised depth mix lands around 27% shallow and 73% mid.
+
+
+#######################################################################
+6. DEFENSIBLE NUMBERS
+#######################################################################
+
+Simulated on inputs shaped like this business: roughly 2.5M monthly
+renewal events, a 10/20/30 depth grid, a saturating dose-response, and
+a sweep over the four quantities that cannot be read off revenue data -
+price, baseline renewal rate, maximum uplift, and Persuadable share.
+
+SENSITIVITY SWEEP
+
+  TREATED SHARE   INCREMENTAL REVENUE     SHARE OF INCREMENTAL
+                  PER DISCOUNT RUPEE      RENEWALS CAPTURED
+  -------------------------------------------------------------------
+  top 5%          0.83 - 1.64             45 - 81%
+  top 10%         0.68 - 1.38             80 - 100%
+
+  - users with ANY profitable depth: 7.4% to 14.3%. Past that the
+    policy simply stops - there is nobody left worth treating at any
+    depth, at any budget
+  - blanket 20% to everyone: MINUS 0.66 per rupee. Value-destructive,
+    and it is the comparison that makes the targeted policy worth
+    describing at all
+
+RECOMMENDED FIGURES TO QUOTE
+
+  SYMBOL  VALUE                       WHY IT IS DEFENSIBLE
+  -------------------------------------------------------------------
+  A       1.4 incremental retained    upper-middle of the 0.83-1.64
+          revenue per discount rupee  band at the top 5%
+  X       60% of incremental          conservative against the
+          renewals                    45-81% band
+  Y       the top 5% of subscribers   matches where the ROI peaks
+
+Do not claim above roughly 2.0 per rupee. At these price points and
+baseline renewal rates the arithmetic does not support it, and the
+break-even table in section 5 is how someone will show that it does
+not.
+
+TWO FACTS THAT WILL BE TESTED
+
+ROI IS INDEPENDENT OF PRICE. The sweep returns identical ratios at Rs
+99, Rs 108 and Rs 299, because price appears in both the numerator and
+the denominator of gain/cost and cancels. A higher price point cannot
+be used to justify a higher ROI claim, and offering one is a quick way
+to lose the room.
+
+THE POLICY TREATS WHO IT CLAIMS TO. Inside the treated top 20% of the
+simulation: 96% Persuadables, 4% neutral, 0% Sure Things, 0% Sleeping
+Dogs. The suppression is not a rule bolted on afterwards - it falls out
+of ranking by gain/cost.
+
+HONESTY CONSTRAINT
+
+These are SIMULATION OUTPUTS UNDER STATED ASSUMPTIONS, not measured
+results. Quoted anywhere outside this folder they are either labelled
+"projected" and framed as design targets, or they are replaced with
+real holdout numbers once the policy has run. Presenting a simulated
+ROI as a measured one fails at the first "how did you measure that?",
+and that is the first question a good interviewer asks.
+
+
+#######################################################################
+7. THE 60-SECOND VERSION
+#######################################################################
+
+They asked for a churn model. A churn score drives no decision, so the
+deliverable is a treat / do-not-treat policy with a discount depth,
+under a margin budget. The question is not who will churn, it is whose
+renewal decision an offer changes.
+
+One row is one (user, cycle), features frozen at T-7, label is renewed
+within three days of the renewal date so that dunning retries are not
+mislabelled as churn. The column that matters is the randomly assigned
+arm, and we do not have it - every discount in three years was given by
+a risk rule, so depth is collinear with risk and nothing causal is
+identified. So phase zero is randomised spend on a budgeted slice: pure
+cost, buying identification. The randomisation is the asset, not the
+model.
+
+Then three models. A calibrated GBM for the baseline renewal
+probability, used for eligibility and for the price term, not for
+targeting. A T- or X-learner for uplift, fit only on randomised rows. A
+monotonic dose-response across a 10/20/30 grid. The policy maximises
+expected revenue, ranks by gain over cost, and treats down the list
+until the budget is gone - which means most users get nothing, and the
+highest-risk users are often skipped.
+
+It is judged on Qini offline and on incremental revenue per discount
+rupee against a permanent holdout, never on AUC, because a working
+intervention destroys the accuracy of the model that drove it. I would
+expect to treat roughly the top 5% at about 1.4 rupees retained per
+rupee spent, against minus 0.66 for the blanket 20% rule running today
+- and I would expect the targeted policy to show a LOWER renewal rate
+than that rule, which is the margin being kept rather than a
+regression.
+
+Week one is not a model. It is the cycle table, the point-in-time
+feature layer, and splitting involuntary churn out to payments, because
+a discount does not fix a dead card.

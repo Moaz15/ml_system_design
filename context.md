@@ -53,7 +53,9 @@ drills, and its candidate case list. Read that file before writing a case
 into the folder, and update its case list as cases are written.
 
 **File naming:** `<domain>_case_<NN>.txt`, zero-padded, e.g.
-`recsys_case_01.txt`, `fraud_case_02.txt`.
+`recsys_case_01.txt`, `fraud_case_02.txt`. A case carried across several
+files instead of one lives in its own sub-folder with a `_index.txt`
+giving the reading order, e.g. `lifecycle/churn_prediction/`.
 
 **Format:** plain `.txt`, same as the RCA files. Fixed width, wrap at 76
 columns, ASCII headers only. No markdown inside case files, no emojis
@@ -415,6 +417,7 @@ mirror every entry into that folder's `_scope.txt`.
 | Case | Domain | Level | Drills |
 |---|---|---|---|
 | [01 Listening hours for capacity planning](forecasting/forecasting_case_01.txt) | forecasting | EASY | Newsvendor quantile from an asymmetric cost; one series, four decisions, opposite postures |
+| [01 Subscription renewal and the discount that pays](lifecycle/churn_prediction/_index.txt) | lifecycle | HARD | Uplift over propensity; the label is a window you chose; the randomisation, not the model, is the asset |
 
 Candidate cases per domain live in each folder's `_scope.txt`.
 

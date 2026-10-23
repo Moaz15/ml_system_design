@@ -1,0 +1,517 @@
+SEARCH - THE CONCEPTS
+=====================
+IF YOU REMEMBER ONLY FIVE THINGS
+
+  1. Search is a funnel because you cannot score ten million documents
+     with an expensive model in 200 milliseconds. Every architectural
+     choice in search is a consequence of that sentence.
+
+  2. Retrieval optimises RECALL. Ranking optimises ORDER. A document
+     that retrieval fails to return can never be rescued by any ranker,
+     however good. Losses at the top of the funnel are permanent.
+
+  3. Lexical and semantic retrieval fail in OPPOSITE directions, which
+     is why production systems run both and fuse them.
+
+  4. Clicks are not relevance. Users click the top result because it is
+     on top. Train on raw clicks and the model learns to reproduce
+     whatever was already ranked first.
+
+  5. The query type decides everything. "mirzapur" and "something scary
+     to listen to tonight" are not the same problem and must not be
+     served by the same logic or judged by the same metric.
+
+
+#######################################################################
+PART 1 - THE ONE CONSTRAINT, AND WHAT IT FORCES
+#######################################################################
+
+You have, say, 10,000,000 documents and about 200ms of budget.
+
+A model good enough to judge relevance properly - one that reads the
+query and the document together - takes maybe 20ms per document. Ten
+million of those is 55 hours. So you cannot do the good thing to
+everything.
+
+The resolution is a funnel: do something cheap to everything, then
+something expensive to the survivors.
+
+    query
+      |
+      v
+    QUERY UNDERSTANDING          cheap, once per query
+      |                          normalise, correct, classify, expand
+      v
+    RETRIEVAL                    cheap per doc, runs over MILLIONS
+      |                          returns ~500-1000 candidates
+      |                          goal: do not lose the right answer
+      v
+    RANKING                      expensive per doc, runs over ~1000
+      |                          returns ~50 ordered
+      |                          goal: get the order right
+      v
+    RE-RANKING / POLICY          very expensive or rule-based, over ~50
+      |                          diversity, freshness, business rules,
+      |                          dedup, blending
+      v
+    results
+
+Each stage is ~1000x smaller than the one before, so each stage can
+afford a model ~1000x more expensive. That is the whole trick.
+
+THE ASYMMETRY THAT MATTERS MOST
+Retrieval and ranking are not symmetric in their failure. If ranking
+puts the right answer at position 4 instead of 1, you lose some value.
+If RETRIEVAL never returns it, you lose all of it, and no downstream
+component can tell that anything went wrong.
+
+This is why retrieval is measured separately, on its own metric -
+recall@1000, the share of known-relevant documents that survive into the
+candidate set. A system with NDCG problems may have a ranking bug. A
+system with a recall@1000 of 0.6 has a ceiling it can never exceed, and
+tuning the ranker is wasted effort until that is fixed.
+
+
+#######################################################################
+PART 2 - THE INVERTED INDEX
+#######################################################################
+
+The reason search is fast at all. Instead of scanning documents for the
+query, you precompute the reverse map: term -> the documents containing
+it.
+
+    "mirzapur"  ->  [doc 5, doc 92, doc 4001, ...]
+    "thriller"  ->  [doc 5, doc 17, doc 88,  ...]
+
+A query for "mirzapur thriller" fetches two POSTING LISTS and combines
+them. No document is ever read. It is a dictionary lookup, not magic.
+
+ANALYSIS is what turns raw text into the terms that go in that
+dictionary, at index time and again at query time:
+
+  - tokenisation      split text into terms; hard for languages without
+                      spaces, and for code-mixed text
+  - lowercasing and unicode normalisation
+  - stemming / lemmatisation   "running" -> "run"; crude but cheap
+  - stop words        drop "the", "of"; less common now, it loses
+                      phrases like "the who"
+  - synonyms          expand at index time or at query time, not both
+
+THE CLASSIC BUG, worth knowing because it is a "have you shipped this"
+signal: the analyser at INDEX time and the analyser at QUERY time must
+be identical. Stem the documents but not the query and nothing matches,
+silently, with no error anywhere.
+
+
+#######################################################################
+PART 3 - LEXICAL RETRIEVAL: TF-IDF AND BM25
+#######################################################################
+
+The intuition is three observations:
+
+  1. A term appearing often in a document suggests the document is
+     about it.                                    -> term frequency, TF
+  2. A term appearing in nearly every document tells you nothing.
+     "the" is worthless, "mirzapur" is decisive.
+                                        -> inverse document frequency
+  3. A long document contains more of every word by accident, and must
+     not get credit for that.               -> length normalisation
+
+TF-IDF multiplies the first two. BM25 is the same idea with two fixes
+that matter in practice:
+
+  - SATURATION. The 20th occurrence of "mirzapur" does not make a
+    document 20x more relevant than the 1st. BM25 flattens out.
+  - proper length normalisation, tunable.
+
+                       f(q,D) * (k1 + 1)
+  score = SUM IDF(q) * ---------------------------------------
+          q in Q        f(q,D) + k1 * (1 - b + b * |D|/avgdl)
+
+  k1 (~1.2-2.0) controls how fast TF saturates.
+  b  (~0.75)    controls how hard long documents are penalised.
+
+You do not need to recite this. You DO need to know that BM25 is the
+default baseline, that it is free, that it needs no training data, and
+that it is genuinely hard to beat. In search it plays the role seasonal
+naive plays in forecasting: if your neural retriever does not clearly
+beat BM25, you do not have a neural retriever, you have a liability.
+
+
+#######################################################################
+PART 4 - WHY LEXICAL IS NOT ENOUGH: VOCABULARY MISMATCH
+#######################################################################
+
+The user types "cheap phone". The document says "budget smartphone".
+Zero shared terms. BM25 scores it zero. The right answer is invisible,
+and it is invisible at the RETRIEVAL stage, so it is gone for good.
+
+That single failure is the reason embeddings exist in search.
+
+But run the argument backwards before you reach for vectors. The user
+types "mirzapur". A document is titled exactly "Mirzapur". Lexical
+retrieval nails this instantly. A semantic model may helpfully decide
+that "Gangs of Wasseypur" is nearby in meaning and rank it up - which
+is not helpful at all, it is wrong.
+
+    LEXICAL is strong on   exact terms, rare words, names, IDs, codes,
+                           numbers, anything the user typed literally
+    LEXICAL is weak on     synonyms, paraphrase, description, intent
+
+    SEMANTIC is strong on  meaning, paraphrase, vague description,
+                           cross-lingual matching
+    SEMANTIC is weak on    exact match, rare entities it never saw in
+                           training, numbers, IDs, negation
+
+Their failure modes are complementary. Hold that thought for Part 6.
+
+
+#######################################################################
+PART 5 - SEMANTIC RETRIEVAL: TWO TOWERS AND ANN
+#######################################################################
+
+The idea: map queries and documents into the same vector space, trained
+so that "close together" means "relevant to each other". Then retrieval
+becomes nearest-neighbour search.
+
+WHY TWO SEPARATE TOWERS, AND NOT ONE MODEL
+This is the concept to actually understand, because it is the same
+latency-times-cardinality constraint from Part 1 showing up inside the
+model architecture.
+
+  BI-ENCODER (two towers)
+    Document tower encodes every document OFFLINE, once. Query tower
+    encodes the query at request time, once. Relevance is a dot product
+    between two vectors that were computed independently.
+    -> 10M documents cost nothing at query time. Fast. Less accurate,
+       because the model never sees query and document together.
+
+  CROSS-ENCODER
+    Query and document are concatenated and read together with full
+    attention. Far more accurate - the model can actually compare them.
+    -> Must run once per (query, document) PAIR at request time.
+       Impossible over 10M documents. Fine over 100.
+
+So: bi-encoder for retrieval, cross-encoder for re-ranking the top
+~100. The funnel again, one level down.
+
+ANN - APPROXIMATE NEAREST NEIGHBOUR
+Even with precomputed vectors, comparing the query against 10M vectors
+exactly is too slow. So you approximate:
+
+  HNSW   a navigable graph; walk toward closer neighbours. Fast, high
+         recall, memory hungry. The common default.
+  IVF    cluster the vectors, search only the nearest few clusters.
+  PQ     compress vectors into small codes; trades accuracy for memory.
+
+"Approximate" is not a figure of speech. You WILL sometimes miss the
+true nearest neighbour. That is a recall loss at the retrieval stage -
+the permanent kind. The tuning knob trades recall against latency and
+memory, and you should know which way you have turned it.
+
+EMBEDDINGS ARE A PIPELINE, NOT A MODEL
+Changing the embedding model means re-encoding the entire corpus and
+rebuilding the index. Query-side and document-side embeddings must come
+from the same model version, or the space is incoherent and results are
+nonsense. Plan the migration before you pick the model.
+
+
+#######################################################################
+PART 6 - HYBRID RETRIEVAL AND FUSION
+#######################################################################
+
+Since lexical and semantic fail in opposite directions, run both and
+merge. Almost every serious production system does this.
+
+The problem in merging is that BM25 scores and cosine similarities are
+on incomparable scales, and BM25 scores are not even comparable across
+queries. Two answers:
+
+  SCORE FUSION     normalise each system's scores, then weighted sum.
+                   Needs tuning, and the normalisation is fragile.
+
+  RECIPROCAL RANK FUSION (RRF)   ignore scores entirely, use RANKS.
+
+                              1
+      RRF(d) = SUM  -------------------
+               i      k + rank_i(d)          k is typically 60
+
+RRF is almost embarrassingly simple, needs no tuning, no score
+calibration, and is very hard to beat. Know it by name; it comes up.
+
+
+#######################################################################
+PART 7 - QUERY UNDERSTANDING
+#######################################################################
+
+Everything that happens before retrieval. Cheap, high leverage, and the
+part weak candidates skip entirely.
+
+  - normalisation: case, unicode, transliteration (Hindi typed in Latin
+    script is one string to the user and a different string to the index)
+  - spelling correction, with a "did you mean" fallback
+  - entity and attribute extraction:
+        "red nike shoes under 3000"
+          -> colour=red, brand=nike, category=shoes, price<3000
+    Once extracted these become FILTERS, not scored terms, which is a
+    completely different retrieval path.
+  - query expansion: add synonyms and related terms
+  - query rewriting: rewrite to a canonical form
+  - intent classification, which is the important one:
+
+THE QUERY TAXONOMY - the single most useful cut in search
+
+  NAVIGATIONAL / KNOWN-ITEM     "mirzapur", "iphone 15 pro"
+    The user knows exactly what they want. There is ONE right answer.
+    Exact match must win. Failure is catastrophic and extremely visible,
+    and it is the classic way an engagement-trained ranker destroys
+    value: it deranks the exact match in favour of something more
+    clickable. Metric: MRR, or plain accuracy@1.
+
+  BROAD / EXPLORATORY           "thriller audiobooks", "something funny"
+    Many right answers. Diversity and coverage matter. Metric: NDCG.
+
+  LONG TAIL                     rare, specific, often zero-result
+    Little or no behavioural data exists for these queries, so
+    click-trained models are blind here and lexical matching carries
+    most of the weight.
+
+HEAD VS TAIL
+Query frequency follows a Zipf distribution: a tiny number of distinct
+queries make up a huge share of traffic, and an enormous number of
+distinct queries each appear once or twice. This splits your strategy:
+head queries can be cached, curated, even hand-tuned; tail queries are
+where the model has to actually generalise. Reporting one average metric
+across both hides everything.
+
+
+#######################################################################
+PART 8 - RANKING
+#######################################################################
+
+FEATURE FAMILIES
+
+  query features          length, intent class, language, rarity
+  document features       quality, popularity, recency, length,
+                          completeness, price, rating
+  match features          BM25 score, embedding similarity, field-level
+                          matches (title vs body vs tags), proximity
+  context features        device, time, location, session history
+  behavioural features    historical CTR / conversion for this
+                          query-document pair
+
+Behavioural features are the most powerful and the most dangerous. They
+encode what previous rankings showed, so they hard-wire the feedback
+loop into the model. See Part 9.
+
+LEARNING TO RANK
+
+  POINTWISE   predict a relevance score per document independently.
+              Simple. Ignores that ranking is inherently relative.
+  PAIRWISE    predict which of two documents should rank higher.
+              RankNet, LambdaRank. Closer to the real objective.
+  LISTWISE    optimise a list metric such as NDCG directly.
+              LambdaMART is the canonical one.
+
+LambdaMART - gradient boosted trees with a listwise objective - remains
+a very strong production default. Neural rankers win when you have
+enormous behavioural data and rich text; GBDT wins on tabular features
+and is far easier to debug. Saying "GBDT unless I have a specific
+reason" is a strong answer, not a weak one.
+
+RE-RANKING AND POLICY
+The last stage, over ~50 documents, where the things that are not
+relevance get applied: diversity (do not return ten near-identical
+results), freshness boosts, dedup, business rules, promoted content,
+and blending across verticals.
+
+
+#######################################################################
+PART 9 - WHERE RELEVANCE LABELS COME FROM
+#######################################################################
+
+Unlike recommendation, search HAS a notion of ground truth, because the
+user declared their intent. That makes human judgement possible, which
+is a real advantage. Two sources, and they disagree:
+
+HUMAN RELEVANCE JUDGEMENTS
+  Trained raters grade (query, document) pairs against a written
+  guideline, usually on a graded scale - Perfect / Excellent / Good /
+  Fair / Bad. Slow and expensive, roughly a few rupees to a few dollars
+  per judgement, but unbiased by position and obtainable for tail
+  queries that have no traffic at all.
+  What makes or breaks it: the GUIDELINE. Relevance is a policy someone
+  has to write down. Measure inter-rater agreement; if raters disagree
+  with each other, your labels have a noise floor and no model can beat
+  it.
+
+BEHAVIOURAL / IMPLICIT LABELS
+  Clicks, dwell time, add-to-cart, purchase, listen-through. Free,
+  abundant, reflects real users rather than raters. And badly biased.
+
+POSITION BIAS - the central problem in search ML
+  Users click the top result partly because it is on top. So click data
+  says "whatever was ranked first is good". Train on it naively and the
+  model learns to reproduce the previous ranking. The rich get richer,
+  the tail starves, and your offline metric improves the whole time.
+
+  Mitigations, in increasing order of effort:
+    - CLICK MODELS that separate examination from relevance: the
+      position-based model, the cascade model, dynamic Bayesian network.
+      The idea is p(click) = p(examined | position) x p(relevant).
+    - INVERSE PROPENSITY SCORING: weight each observed click by
+      1/p(examined), so a click at position 10 counts for much more
+      than a click at position 1.
+    - RANDOMISATION: perturb rankings on a slice of traffic to collect
+      genuinely unbiased data. Costs a little relevance, buys the only
+      clean labels you will ever have.
+
+  Related biases worth naming: trust bias (users trust top results and
+  click them even when poor), presentation bias (bigger images and
+  richer snippets get clicked), and selection bias (you only ever learn
+  about documents you actually showed).
+
+THE PRACTICAL ANSWER is usually both: human judgements as the stable,
+unbiased backbone especially for the tail, behavioural data for scale
+and for head queries, and a measured correlation between the two.
+
+
+#######################################################################
+PART 10 - MEASUREMENT
+#######################################################################
+
+OFFLINE METRICS
+
+  Recall@k        share of relevant documents that survive retrieval.
+                  Measure this on the RETRIEVAL stage separately. It is
+                  the ceiling on everything downstream.
+  Precision@k     share of the top k that are relevant.
+  MRR             1 / rank of the first relevant result, averaged. The
+                  right metric for known-item and navigational search,
+                  where there is exactly one correct answer.
+  NDCG@k          the standard for graded relevance.
+
+  NDCG intuition, which is all you need:
+      DCG sums the relevance of each result, DISCOUNTED by how far down
+      it sits - position 1 counts fully, position 10 barely counts.
+      Then NORMALISE by the best possible ordering for that query, so
+      queries with many relevant documents do not dominate the average.
+      Result: a 0-to-1 number per query that rewards putting the good
+      things high.
+
+          DCG@k = SUM  rel_i / log2(i + 1)
+          NDCG@k = DCG@k / IDCG@k
+
+THE WARNING THAT MATTERS: NDCG computed on CLICK labels will cheerfully
+greenlight a model that loses money, because it is measuring agreement
+with past clicks, not value. Offline metrics are a filter for obviously
+bad changes, never a substitute for an online test.
+
+ONLINE METRICS
+
+  Primary should be success-shaped, never engagement-shaped:
+    successful sessions, satisfied clicks (a click followed by long
+    dwell or a completion), conversion, listen-through, revenue per
+    search.
+
+  Diagnostics that separate genuine satisfaction from thrashing:
+    pogo-sticking      click then immediately back to results
+    reformulation rate user rewrites the query
+    clicks per session UP can mean hunting, not engagement
+    abandonment rate   searched, clicked nothing
+    zero-result rate
+    time to first successful click
+    depth of clicked rank
+
+  CTR as a primary metric is how you get clickbait. It belongs in the
+  diagnostics list, never at the top.
+
+INTERLEAVING - the search-specific experiment technique
+  Instead of splitting users between ranker A and ranker B, MIX the two
+  rankings into one list (team-draft interleaving) and see which
+  ranker's contributed documents get clicked more. Every user sees
+  both, so each user is their own control and within-user variance
+  disappears. It is typically 10x to 100x more sensitive than a
+  standard A/B test, meaning you can read a result in days instead of
+  weeks.
+  Limit: it compares RANKERS on click-based preference. It cannot
+  measure long-term or downstream business effects, so the usual
+  pattern is interleaving to select among candidates quickly, then a
+  conventional A/B on the winner to measure real impact.
+
+
+#######################################################################
+PART 11 - THE INDEXING PIPELINE
+#######################################################################
+
+Half of search engineering, and the half that never gets mentioned by
+weak candidates.
+
+    documents -> parse -> enrich -> analyse -> build -> deploy -> serve
+
+  - FULL REBUILD vs INCREMENTAL UPDATE. Rebuilds are simple and slow;
+    incremental is fast and accumulates inconsistency.
+  - FRESHNESS SLA. How long between a document changing and search
+    reflecting it? Minutes for a marketplace, days for a static
+    catalog. This is a product decision with a big cost attached.
+  - DELETIONS AND TOMBSTONES. An out-of-stock or removed item still
+    sitting in the index is one of the most common and most damaging
+    search bugs, because it converts at zero.
+  - INDEX/SERVING SKEW. The document as indexed versus the document as
+    it is now.
+  - SHARDING AND REPLICATION. Shard for index size, replicate for QPS
+    and availability.
+  - CACHING. The head of the query distribution is small and repetitive,
+    so a query-result cache buys a lot. The hard part is invalidation
+    when the index changes.
+
+
+#######################################################################
+PART 12 - FAILURE MODES TO HAVE READY
+#######################################################################
+
+  ZERO RESULTS            no candidates at all. Needs a recall ladder:
+                          relax filters, drop terms, spell-correct,
+                          fall back to semantic, finally show something.
+  NAVIGATIONAL REGRESSION exact match deranked below something more
+                          clickable. Catastrophic, very visible, and
+                          the signature failure of engagement training.
+  VOCABULARY MISMATCH     see Part 4.
+  POPULARITY LOOP         behavioural features plus position bias means
+                          the already-popular stay popular and the tail
+                          is never shown, so never gets data, so never
+                          ranks. Self-reinforcing.
+  STALE INDEX             results for things that no longer exist or
+                          have changed price, stock or title.
+  FRESHNESS VS RELEVANCE  a permanent tension with no correct answer,
+                          only a chosen trade.
+  LATENCY BLOWOUT         usually the re-ranking stage or an ANN
+                          parameter turned toward recall.
+  MULTILINGUAL / CODE-MIX transliteration, mixed scripts, and a
+                          tokeniser that was not built for either.
+  LONG-TAIL STARVATION    the aggregate metric looks fine while the
+                          tail, which is most of your distinct queries,
+                          is quietly broken.
+
+
+#######################################################################
+HOW THIS CONNECTS TO THE REST OF THE REPO
+#######################################################################
+
+  - The funnel (cheap over many, expensive over few) is identical in
+    recommendation/. Same constraint, different input: a query instead
+    of a user.
+  - Position bias and the popularity feedback loop are the SAME problem
+    as in recommendation/, and the mitigations transfer exactly.
+  - "Do not optimise engagement when you are paid in purchases" is the
+    Goodhart failure from the RCA repo, arriving here as NDCG-on-clicks.
+  - Choosing a relevance threshold, or where to cut the candidate set,
+    is the same cost-ratio question as the newsvendor quantile in
+    forecasting/: what does a miss cost versus a false positive.
+
+
+WHAT TO DRILL NEXT
+------------------
+Once this file is boring, the cases in search/_scope.txt are the drills.
+Start with case 01 - retrieval, ranking and evaluation for a content
+catalog - because it exercises Parts 1, 5, 6, 9 and 10 in one pass.

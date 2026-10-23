@@ -1,0 +1,805 @@
+INVERTED INDEX - THE CONCEPT
+============================
+
+  1. An inverted index is a dictionary: term -> list of documents
+     containing it. Nothing more mysterious than that. All the
+     engineering is about making that list small and fast to walk.
+
+  2. The posting lists are SORTED BY DOCUMENT ID. That one choice is
+     what makes intersection, skipping and compression all possible.
+
+  3. The analyser that builds the index and the analyser that processes
+     the query must be the SAME analyser. The classic silent bug.
+
+  4. An index is not updated in place. It is written once as an
+     immutable segment, deletes are tombstones, and merges clean up
+     later. Freshness is a consequence of that design, not a setting.
+
+  5. The index knows about WORDS, not MEANING. "scary audiobook" will
+     never match a show described as "chilling horror story". That gap
+     is exactly why vector retrieval exists.
+
+
+PART 0 - THE RUNNING EXAMPLE
+---------------------------------------------------------------------------
+
+A tiny audio catalog of five shows. This is the whole world for the
+rest of the file.
+
+  D1  "Mirzapur crime thriller"
+  D2  "Thriller night ghost story"
+  D3  "Crime Patrol true crime stories"
+  D4  "Mirzapur season two thriller"
+  D5  "Ghost stories for kids"
+
+Keep these five in mind. Every structure below is built from them, so
+you can always check the machine by hand.
+
+PART 1 - THE PROBLEM: SCANNING DOES NOT SCALE
+---------------------------------------------------------------------------
+
+The naive way to answer "mirzapur thriller" is to open every document
+and look for the words. For five documents that is fine. For ten
+million it is not.
+
+  10,000,000 documents  x  ~2KB of text each  =  20 GB to read
+  Even at 1 GB/s that is 20 seconds. Per query.
+
+And it gets worse with traffic: every query rereads the same 20 GB.
+
+The fix is the standard computer-science move: PRECOMPUTE. Do the
+expensive reading once, at index time, and store the answer in a shape
+that makes query time cheap. The shape is the inverted index.
+
+The trade you are making, which is the trade behind every index ever
+built:
+
+  index time   slow, offline, once per document, nobody is waiting
+  query time   fast, online, millions of times, a user is waiting
+
+Anything you can move from the right column to the left, you move.
+
+
+#######################################################################
+PART 2 - THE IDEA: TURN THE BOOK INSIDE OUT
+#######################################################################
+
+A book has a forward map: page -> words on that page. Nobody reads a
+book that way to find a topic. They use the index at the back, which
+is the reverse map: word -> pages it appears on.
+
+That is the entire idea, and that is why it is called INVERTED - it is
+the inversion of the natural document -> terms direction.
+
+  FORWARD INDEX (the natural direction)
+    D1 -> {mirzapur, crime, thriller}
+    D2 -> {thriller, night, ghost, story}
+    ...
+
+  INVERTED INDEX (the useful direction)
+    mirzapur  -> [D1, D4]
+    thriller  -> [D1, D2, D4]
+    crime     -> [D1, D3]
+    ghost     -> [D2, D5]
+    story     -> [D2, D3, D5]
+    ...
+
+Now "mirzapur thriller" is: fetch two short lists, intersect them, get
+[D1, D4]. No document was read. Nothing was scanned. The cost is
+proportional to how many documents contain the query terms, not to how
+many documents exist.
+
+That sentence is the payoff of the whole file. Everything after this is
+detail about making those lists small, sorted, skippable and fresh.
+
+
+#######################################################################
+PART 3 - ANALYSIS: FROM TEXT TO TERMS
+#######################################################################
+
+Before anything can be indexed you must decide what a "term" is. The
+pipeline that turns a string into terms is called ANALYSIS, and it runs
+twice: once over every document at index time, once over the query at
+query time.
+
+Walk D5 through it: "Ghost stories for kids"
+
+  1. CHARACTER FILTERING   strip HTML, fix encodings, unify unicode
+                           (so the two ways to write "e-acute" become
+                           one way)
+
+  2. TOKENISATION          "Ghost stories for kids"
+                           -> ["Ghost", "stories", "for", "kids"]
+                           Splitting on spaces is a convenience of
+                           English. Chinese and Japanese have no
+                           spaces; Hindi-English code-mixing breaks
+                           naive rules; "C++" and "AT&T" die here.
+
+  3. LOWERCASING           -> ["ghost", "stories", "for", "kids"]
+                           Cheap and almost always right. Loses the
+                           distinction between "Apple" and "apple".
+
+  4. STOP WORDS            drop "for"
+                           -> ["ghost", "stories", "kids"]
+                           Saves space, but destroys "The Who" and
+                           "to be or not to be". Modern systems mostly
+                           keep stop words and let scoring handle them,
+                           because IDF already makes them nearly
+                           worthless. See Part 9.
+
+  5. STEMMING / LEMMA      "stories" -> "story", "kids" -> "kid"
+                           -> ["ghost", "story", "kid"]
+                           Stemming is crude rule-chopping (fast,
+                           sometimes wrong: "university" -> "univers").
+                           Lemmatisation uses a dictionary (slower,
+                           correct). Both exist to make the query word
+                           and the document word collide.
+
+  6. SYNONYMS              optionally "audiobook" -> "audio book"
+                           Do this at INDEX time or at QUERY time, not
+                           both, or you get a combinatorial mess.
+
+The result for the catalog:
+
+  D1 -> mirzapur, crime, thriller
+  D2 -> thriller, night, ghost, story
+  D3 -> crime, patrol, true, crime, story
+  D4 -> mirzapur, season, two, thriller
+  D5 -> ghost, story, kid
+
+THE BUG THAT EVERY SEARCH ENGINEER HAS SHIPPED ONCE
+Index the documents with a stemmer, then forget the stemmer on the
+query path. The index contains "story". The user types "stories". The
+query term is "stories". Nothing matches. No error, no log line, no
+crash - just zero results for a chunk of the query distribution, and
+nobody notices for a month. Same analyser, both sides, always.
+
+
+#######################################################################
+PART 4 - ANATOMY: DICTIONARY + POSTING LISTS
+#######################################################################
+
+The index is two pieces that live in different places.
+
+  THE TERM DICTIONARY (or vocabulary, or lexicon)
+    Every distinct term, sorted, each with a pointer to where its list
+    lives and a count of how many documents contain it.
+    Small enough to keep in memory. Usually a sorted structure that
+    supports prefix lookup: a B-tree, a trie, or in Lucene an FST
+    (finite state transducer, which is a trie with shared suffixes -
+    very compact).
+
+  THE POSTING LISTS
+    For each term, the list of documents containing it. Big. Lives on
+    disk, read in blocks, memory-mapped and cached by the OS.
+
+For our catalog, with N = 5 documents:
+
+    TERM        df   POSTING LIST (sorted by doc id)
+    --------------------------------------------------
+    crime        2   [D1, D3]
+    ghost        2   [D2, D5]
+    kid          1   [D5]
+    mirzapur     2   [D1, D4]
+    night        1   [D2]
+    patrol       1   [D3]
+    season       1   [D4]
+    story        3   [D2, D3, D5]
+    thriller     3   [D1, D2, D4]
+    true         1   [D3]
+    two          1   [D4]
+
+  df = DOCUMENT FREQUENCY, in how many documents the term appears.
+       Stored in the dictionary because scoring needs it constantly
+       (Part 9) and it is one number per term, not per posting.
+
+DOC IDs ARE INTERNAL, DENSE INTEGERS
+D1..D5 here, but in reality 0,1,2,...,N-1 assigned by the indexer, with
+a side table mapping them to real product ids or URLs. Dense small
+integers matter: they compress well (Part 10) and they sort cheaply.
+
+WHY SORTED BY DOC ID - the choice everything depends on
+  - two sorted lists intersect in one linear pass (Part 6)
+  - sorted ascending integers turn into small gaps, which compress
+    brutally well (Part 10)
+  - you can skip forward without decoding everything (Part 7)
+None of that works on an unsorted list. This is not a detail.
+
+
+#######################################################################
+PART 5 - WHAT ELSE LIVES IN A POSTING
+#######################################################################
+
+A posting does not have to be just a doc id. Four levels, each costing
+more space and buying more capability.
+
+  LEVEL 1  DOC IDS ONLY                  thriller -> [1, 2, 4]
+           Answers: does this document contain the term.
+           Enough for filtering. Not enough for ranking.
+
+  LEVEL 2  + TERM FREQUENCY (tf)         crime -> [(1,1), (3,2)]
+           How often the term occurs in that document. "crime" twice
+           in D3, once in D1. Needed by TF-IDF and BM25.
+
+  LEVEL 3  + POSITIONS                   where in the document
+           D1: crime at position 2
+           D3: crime at positions 1 and 4
+           Needed for phrase and proximity queries (Part 8). This is
+           usually the single biggest part of the index - positions
+           outweigh doc ids and frequencies combined.
+
+  LEVEL 4  + PAYLOADS / OFFSETS          character offsets for
+           highlighting, per-term weights, field ids
+
+Our catalog with positions, fully written out. Note the hole at
+position 3 in D5, where the stop word "for" was dropped - the position
+is burned, not reused, so that the phrase "stories for kids" cannot be
+accidentally formed by "stories kids":
+
+    crime     -> (D1, tf 1, [2]) (D3, tf 2, [1,4])
+    ghost     -> (D2, tf 1, [3]) (D5, tf 1, [1])
+    kid       -> (D5, tf 1, [4])
+    mirzapur  -> (D1, tf 1, [1]) (D4, tf 1, [1])
+    night     -> (D2, tf 1, [2])
+    patrol    -> (D3, tf 1, [2])
+    season    -> (D4, tf 1, [2])
+    story     -> (D2, tf 1, [4]) (D3, tf 1, [5]) (D5, tf 1, [2])
+    thriller  -> (D1, tf 1, [3]) (D2, tf 1, [1]) (D4, tf 1, [4])
+    true      -> (D3, tf 1, [3])
+    two       -> (D4, tf 1, [3])
+
+The decision of WHICH LEVEL to store is a real design choice. Positions
+can double or triple index size. If you never run phrase queries on a
+field, do not index positions for it.
+
+
+#######################################################################
+PART 6 - ANSWERING A QUERY: BOOLEAN AND INTERSECTION
+#######################################################################
+
+Query: "mirzapur thriller", treated as AND.
+
+  1. Analyse the query with the SAME analyser -> [mirzapur, thriller]
+  2. Dictionary lookup -> two posting lists
+       mirzapur  [1, 4]      df 2
+       thriller  [1, 2, 4]   df 3
+  3. Intersect.
+
+THE INTERSECTION, which is the inner loop of all of search:
+
+    i, j at the front of both lists
+    while both have elements:
+        if list_a[i] == list_b[j]:  emit, advance both
+        elif list_a[i] <  list_b[j]: advance i
+        else:                        advance j
+
+    mirzapur:  1        4
+    thriller:  1   2    4
+               ^
+    1 == 1 -> emit 1, advance both
+    4 vs 2  -> advance thriller
+    4 == 4 -> emit 4
+    result: [1, 4]  =  D1, D4
+
+Linear in the length of the lists, no document touched. For OR you
+merge instead of intersect; for NOT you walk the list and skip matches.
+
+ONE OPTIMISATION WORTH KNOWING, because it is the kind of thing that
+separates reading about search from having built it: process the
+RAREST TERM FIRST. Intersecting [1,4] with a million-long list costs at
+most a few million steps if you drive the loop from the short list and
+skip through the long one. Start from the long list and you have
+wasted the day. This is why df is kept in the dictionary - it lets the
+query planner order the terms before any list is read.
+
+
+#######################################################################
+PART 7 - SKIP POINTERS
+#######################################################################
+
+Our lists have three elements. Real ones have ten million. Advancing
+one posting at a time through a ten-million-long list to find doc 8,000
+is silly, so posting lists carry SKIP POINTERS: every k postings, a
+shortcut saying "the next entry here is doc X, and it lives at byte
+offset Y".
+
+    thriller: [3, 9, 17, | 41, 55, 60, | 72, 88, 91, | 103, ...]
+               skip-> 41       skip-> 72      skip-> 103
+
+Looking for doc 72: instead of stepping 3, 9, 17, 41, 55, 60, 72, you
+read the skip entries, see 41 < 72 and 72 <= 72, jump straight to the
+third block, decode only it.
+
+  - Typical k is around sqrt(list length), balancing the cost of
+    storing skips against the saving from using them.
+  - Skips only work because the list is sorted. Again.
+  - The operation the whole engine is built around is not "next" but
+    ADVANCE-TO(doc_id) - "give me the first posting at or after this
+    doc". Everything (intersection, filtering, WAND in Part 11) is
+    expressed in terms of it.
+
+
+#######################################################################
+PART 8 - PHRASE AND PROXIMITY QUERIES
+#######################################################################
+
+Query: "crime thriller" as an exact phrase.
+
+Doc-id intersection says D1 (D3 has crime but no thriller). But a
+phrase needs the words ADJACENT, in order. That is what positions are
+for:
+
+    D1:  crime at [2],  thriller at [3]
+         3 == 2 + 1  ->  the phrase occurs. MATCH.
+
+Try a phrase that should fail, "thriller night", against D4:
+
+    D4:  thriller at [4],  night - not present. No match.
+
+And against D2:
+    D2:  thriller at [1],  night at [2]   ->  2 == 1 + 1. MATCH.
+
+So a phrase query is a two-level intersection: first on doc ids, then
+on positions within each surviving document.
+
+PROXIMITY is the same with a looser rule: "crime NEAR/3 story" means
+some position of crime and some position of story differ by at most 3.
+In D3, crime is at [1,4] and story at [5]: 5 - 4 = 1, so it matches,
+and it matches more tightly than a document where the words are 20
+words apart. Many rankers feed that distance in as a feature.
+
+SHINGLES (an alternative) index word pairs as single terms - "crime
+thriller" becomes one term. Phrase lookup becomes a plain dictionary
+hit, very fast, but the index grows a lot and only fixed-length phrases
+work. Used for hot phrases, not generally.
+
+
+#######################################################################
+PART 9 - SCORING: WHY THE INDEX STORES tf AND df
+#######################################################################
+
+Boolean matching gives you a SET. Users need a RANKED LIST. The index
+stores exactly the numbers needed to compute a score cheaply while
+walking the postings.
+
+Three intuitions, each one turning into a term in the formula:
+
+  1. A word that occurs often IN THIS DOCUMENT suggests the document
+     is about it.                                          -> tf
+  2. A word that occurs in NEARLY EVERY DOCUMENT tells you nothing.
+     "story" is weak, "mirzapur" is decisive.              -> idf
+  3. A long document contains more of every word by accident and must
+     not get credit for that.              -> length normalisation
+
+IDF, worked on our catalog (N = 5), using idf = ln(N / df):
+
+    mirzapur   df 2  ->  ln(2.5)  = 0.92     strong signal
+    crime      df 2  ->  ln(2.5)  = 0.92
+    thriller   df 3  ->  ln(1.67) = 0.51     weaker, it is everywhere
+    story      df 3  ->  ln(1.67) = 0.51
+    kid        df 1  ->  ln(5)    = 1.61     very rare, very decisive
+
+Notice what this does for free: if "the" appeared in all five
+documents, its idf would be ln(1) = 0. Zero. A stop word list is
+partly redundant with IDF, which is why modern engines mostly stopped
+removing stop words.
+
+BM25 is the same three intuitions with two fixes, and it is the
+default lexical scorer everywhere:
+
+    score(q, d) = SUM over terms t in q of
+
+                                     tf x (k1 + 1)
+                    idf(t)  x  --------------------------------
+                               tf + k1 x (1 - b + b x dl/avgdl)
+
+  FIX ONE - SATURATION (k1, typically 1.2 to 2.0)
+    In raw TF-IDF, a document saying "crime" 50 times scores 50x one
+    saying it once. That is wrong; the 50th occurrence adds almost
+    nothing. BM25 makes tf saturate - the curve flattens.
+
+  FIX TWO - LENGTH (b, typically 0.75)
+    dl/avgdl is this document's length over the average. b = 1 fully
+    penalises long documents, b = 0 ignores length entirely, 0.75 is
+    the usual compromise.
+
+Our document lengths, in indexed terms:
+    D1 = 3, D2 = 4, D3 = 5, D4 = 4, D5 = 3    avgdl = 3.8
+
+So the index stores tf per posting, df per term, and dl per document
+(in the forward index, Part 13) - because those are exactly the three
+inputs BM25 needs, and they can all be read while walking the list.
+The structure is shaped by the formula.
+
+BM25F is the field-aware version: a term matching in the TITLE should
+count more than one matching in the DESCRIPTION. It combines the
+per-field frequencies with per-field weights BEFORE saturating, which
+is subtly but importantly different from scoring the fields separately
+and adding up.
+
+
+#######################################################################
+PART 10 - COMPRESSION: WHY THE LISTS ARE SMALL
+#######################################################################
+
+Posting lists are the bulk of the index and they are read from disk on
+every query, so every byte saved is latency saved. Three tricks, in
+order of how much they buy.
+
+  GAP (DELTA) ENCODING - the big one
+    A sorted list of doc ids becomes a list of differences.
+
+      thriller: [3, 9, 17, 41, 55, 60, 72]
+      becomes:  [3, 6,  8, 24, 14,  5, 12]
+
+    Large numbers become small numbers. And a common term has a DENSE
+    list - it appears in many documents, so consecutive doc ids are
+    close together, so the gaps are tiny. The longer the list, the
+    better it compresses. That is a very friendly property.
+
+  VARIABLE-BYTE / VARINT ENCODING
+    Do not spend 4 bytes on the number 6. Use one byte, with the top
+    bit saying "there is more". Small gaps become one byte each.
+    Fancier schemes (PForDelta, Simple-9, Roaring bitmaps, FOR with
+    SIMD) pack blocks of 128 gaps together and decode them with vector
+    instructions. Same idea, more engineering.
+
+  FRONT CODING in the dictionary
+    Sorted terms share prefixes: "thrill", "thriller", "thrillers".
+    Store the shared prefix once and only the suffixes. An FST does
+    this and shares suffixes too.
+
+Rough result: a well-built inverted index with positions is on the
+order of 20-40% the size of the original text, and doc-ids-only can be
+under 10%. That is why the whole thing fits in memory often enough to
+make search feel instant.
+
+
+#######################################################################
+PART 11 - TOP-K WITHOUT SCORING EVERYTHING
+#######################################################################
+
+Query "thriller" against ten million documents. Two million of them
+contain it. The user wants 10 results. Scoring two million documents to
+return ten is almost all wasted work.
+
+  MAX-SCORE / WAND (Weak AND) - the standard answer
+    For each term you can precompute an UPPER BOUND on what it could
+    ever contribute to any document's score (its idf times the best
+    possible tf term). While walking, you keep a heap of the best k so
+    far; the kth score is your THRESHOLD. If the sum of the upper
+    bounds of the terms a candidate could match is below the
+    threshold, that candidate cannot make the top k, so you do not
+    score it - you ADVANCE-TO past it. Whole regions of the posting
+    lists are skipped without being decoded.
+
+  BLOCK-MAX WAND
+    The same, but bounds are stored per block of postings rather than
+    per whole list, so the bounds are much tighter and much more gets
+    skipped. This is what a modern Lucene actually runs.
+
+  IMPACT-ORDERED / TIERED POSTINGS
+    Sort a list by score contribution instead of by doc id, read the
+    front of it, stop early. You get speed and lose the clean sorted
+    order that intersection needs, so it is used selectively.
+
+  STATIC TIERING
+    Keep a small index of high-quality documents (popular, recent,
+    good). Query it first; if it yields enough good results, never
+    touch the big index. A large share of head traffic never leaves
+    tier one.
+
+The theme: these are all the same move as the funnel in
+search/concept.txt - do the cheap thing over many, the expensive thing
+over few - applied one level deeper, inside retrieval itself.
+
+
+#######################################################################
+PART 12 - UPDATES, DELETES, SEGMENTS AND MERGES
+#######################################################################
+
+Here is the part that surprises people. You cannot efficiently update
+an inverted index in place. Adding one document to the catalog would
+mean inserting into the middle of dozens of compressed, sorted,
+skip-pointered lists on disk. Every one of them would have to be
+rewritten.
+
+So nobody does that. Instead:
+
+  SEGMENTS
+    A segment is a small, complete, IMMUTABLE inverted index. New
+    documents accumulate in memory and are periodically flushed as a
+    new segment. An index is therefore a collection of segments, and a
+    query runs against ALL of them and merges the results.
+
+  DELETES ARE TOMBSTONES
+    You cannot remove a posting from an immutable segment. You set a
+    bit in a deleted-documents bitmap, and results are filtered against
+    it at query time. The data is still there, taking space, until:
+
+  MERGES
+    In the background, small segments are merged into bigger ones.
+    During the merge, deleted documents are genuinely dropped and the
+    lists are rewritten compactly. Merging is expensive IO and is a
+    common cause of latency spikes and disk-usage sawtooth.
+
+  AN UPDATE IS A DELETE PLUS AN INSERT
+    There is no edit. Changing a title tombstones the old document and
+    indexes a new one, with a new internal doc id.
+
+  REFRESH VS COMMIT (near-real-time search)
+    REFRESH makes recent documents searchable by opening a new
+    in-memory segment - typically every second or so. COMMIT makes
+    them durable on disk - slower, rarer. "Why is my new show not
+    showing up" is almost always the refresh interval, and the knob
+    trades freshness against indexing throughput.
+
+This is the same log-structured design as an LSM-tree database, for the
+same reason: sequential writes are cheap, random in-place updates to
+compressed sorted structures are not.
+
+CONSEQUENCE WORTH SAYING OUT LOUD
+Because df and N change as segments change, scores change slightly as
+merges happen, and two shards with different document mixes compute
+slightly different idf for the same term. Usually ignorable, sometimes
+the explanation for "the same query gives different orders on different
+replicas".
+
+
+#######################################################################
+PART 13 - THE FORWARD INDEX, THE OTHER HALF
+#######################################################################
+
+The inverted index answers "which documents contain this term". It is
+hopeless at the opposite question - "for this document, what is its
+price / rating / length / category" - which you need for sorting,
+filtering, faceting and feature extraction.
+
+So every real engine keeps BOTH directions:
+
+  INVERTED INDEX   term -> documents            matching
+  DOC VALUES       document -> field value      sorting, faceting,
+                   (column-oriented, per field) scoring features
+  STORED FIELDS    document -> original text    display on the results
+                                                page, highlighting
+
+Doc values are stored column-wise because the access pattern is "read
+this one field for a thousand documents", not "read everything about
+one document". Document length (dl) for BM25 lives here too.
+
+If a question asks how you would rank by price, or facet by category,
+or feed a feature into a learned ranker, the answer involves doc values,
+not posting lists.
+
+
+#######################################################################
+PART 14 - FIELDS, FILTERS AND FACETS
+#######################################################################
+
+Documents are not flat text. A show has a title, a description, a
+language, a category, a rating.
+
+  FIELDED TERMS
+    The term is really (field, text). "title:mirzapur" and
+    "description:mirzapur" are different dictionary entries with
+    different posting lists. That is what lets the title match count
+    more (BM25F, Part 9).
+
+  FILTERS ARE JUST POSTING LISTS
+    "language = hindi" is a term with a posting list. Filtering is
+    intersecting with it. For very common filters the list is better
+    stored as a BITMAP (one bit per document, or a Roaring bitmap),
+    because AND-ing two bitmaps is a few machine instructions per 64
+    documents.
+
+  FILTERS ARE CACHEABLE, QUERIES ARE NOT
+    "language = hindi" is the same bitmap for every user, so it is
+    cached and reused. The scored part of the query is not. Separating
+    the two - a filter clause that does not affect score and a query
+    clause that does - is a real performance lever.
+
+  FACET COUNTS ("Thriller (412)") come from counting over the matching
+    doc set using doc values, not from the inverted index.
+
+
+#######################################################################
+PART 15 - PREFIX, WILDCARD AND FUZZY
+#######################################################################
+
+The dictionary is sorted, which gives you more than exact lookup.
+
+  PREFIX / AUTOCOMPLETE     "thri*" is a range scan over the sorted
+                            dictionary: every term between "thri" and
+                            "thrj". Cheap. An FST does it in memory.
+
+  LEADING WILDCARD          "*hriller" cannot use the sort order at
+                            all. The fix is a second index over
+                            REVERSED terms, so a leading wildcard
+                            becomes a trailing one.
+
+  GENERAL WILDCARD / FUZZY  a K-GRAM INDEX: index 3-letter pieces of
+                            each term ("thr", "hri", "ril", ...) and
+                            look up terms sharing enough pieces.
+                            Lucene instead walks the FST against a
+                            Levenshtein automaton, which finds all
+                            terms within edit distance 1 or 2 without
+                            scanning the dictionary.
+
+  SPELL CORRECTION          same machinery: candidate terms within a
+                            small edit distance, ranked by df and by
+                            what users actually clicked afterwards.
+
+All of these expand ONE query term into MANY index terms, then OR the
+posting lists. That is why a sloppy wildcard query can be thousands of
+times more expensive than it looks, and why engines cap the expansion.
+
+
+#######################################################################
+PART 16 - SCALE: SHARDING, REPLICATION, CACHING
+#######################################################################
+
+  DOCUMENT PARTITIONING (what everyone does)
+    Split the documents across shards; each shard holds a complete
+    inverted index over its own slice. A query goes to ALL shards,
+    each returns its local top k, and a coordinator merges.
+    + simple, balanced, easy to add documents
+    - every query touches every shard, so tail latency is the SLOWEST
+      shard, not the average one
+
+  TERM PARTITIONING (rare)
+    Split by term: this node owns "a-f". A query touches only the
+    nodes holding its terms.
+    + less fan-out per query
+    - brutal load imbalance (one hot term = one hot node), and
+      multi-term queries must ship long posting lists across the
+      network. Almost nobody ships this.
+
+  REPLICATION
+    Copies of each shard for QPS and availability. Shard for index
+    size, replicate for traffic.
+
+  CACHING, at three levels
+    - query result cache: the head of the query distribution is small
+      and repetitive, so this buys a lot. The hard part is
+      invalidation when the index changes.
+    - filter/bitmap cache: shared across users, very high hit rate.
+    - OS page cache over the posting files: the quiet one that does
+      most of the work, and the reason a cold node is slow for
+      minutes after a restart.
+
+
+#######################################################################
+PART 17 - SIZING INTUITION
+#######################################################################
+
+Worth being able to do on a whiteboard.
+
+  10,000,000 documents, ~200 terms each after analysis
+  = 2,000,000,000 postings
+
+  doc id + tf, gap-encoded and varint'd:  ~1-2 bytes per posting
+      -> roughly 2-4 GB
+  with positions:                         ~2-3x that
+      -> roughly 6-12 GB
+
+  Distinct terms: a few million (Heaps' law - vocabulary grows roughly
+  as the square root of collection size, and never stops growing,
+  because names, typos and product codes are infinite).
+  The dictionary is therefore small - hundreds of MB at most, and it
+  stays in memory.
+
+Two laws worth naming:
+  ZIPF   term frequencies are brutally skewed. The few most common
+         terms cover a huge share of all occurrences, and their
+         posting lists are gigantic - which is exactly why WAND and
+         block-max matter.
+  HEAPS  vocabulary keeps growing with collection size.
+
+
+#######################################################################
+PART 18 - WHAT AN INVERTED INDEX CANNOT DO
+#######################################################################
+
+It matches STRINGS. It has no idea what they mean.
+
+  query: "scary audiobook for a late night"
+  doc:   "a chilling horror story to listen to after dark"
+
+  Shared terms after analysis: essentially none. BM25 score: ~0.
+  A human would call this a perfect match.
+
+This is VOCABULARY MISMATCH, and no amount of stemming, synonyms or
+tuning fixes it in general - you cannot enumerate every way people
+phrase things. It is the exact gap that dense/vector retrieval fills:
+embed query and document into the same space and retrieve by
+similarity, so meaning matches even when words do not.
+
+And the mirror image is just as real:
+
+  query: "B07XJ8C8F5"  (an exact product code)
+  A vector index will return things that are vaguely similar. The
+  inverted index returns the one right answer, instantly.
+
+Lexical is precise and literal. Vector is fuzzy and semantic. They
+fail in OPPOSITE directions, which is why production systems run both
+and fuse the results (hybrid retrieval, usually with reciprocal rank
+fusion). The inverted index does not become obsolete; it becomes one
+of two legs.
+
+
+#######################################################################
+PART 19 - FAILURE MODES TO HAVE READY
+#######################################################################
+
+  ANALYSER SKEW        index-time and query-time analysers differ.
+                       Silent zero-result class. The classic.
+  STALE / LAGGING INDEX documents searchable seconds or hours after
+                       they change. Refresh interval, merge pressure,
+                       or a stuck indexing pipeline.
+  TOMBSTONE BLOAT      heavy deletes without merges: index size and
+                       query cost grow while the document count does
+                       not.
+  HOT TERM             a query term with a 50-million-long posting
+                       list. Mitigated by WAND, tiering, or just
+                       refusing to score it alone.
+  EXPANSION EXPLOSION  a wildcard or fuzzy query expanding to 100,000
+                       terms and OR-ing 100,000 posting lists.
+  DEEP PAGINATION      "page 500" means every shard must produce and
+                       merge 5,000 results. Cost grows with offset.
+                       Use search-after/cursors, not offsets.
+  SHARD TAIL LATENCY   p99 of the query is p99 of the slowest of N
+                       shards, which is much worse than p99 of one.
+  IDF SKEW ACROSS SHARDS same query, different order on different
+                       replicas, because df is local.
+  MISSING FROM INDEX   the item exists in the catalog but was never
+                       indexed. Converts at zero and is invisible in
+                       every ranking metric, because the ranker never
+                       sees it.
+  COLD CACHE           a restarted node serving from disk until the
+                       page cache refills.
+
+
+#######################################################################
+THE WHOLE STORY IN ONE PAGE
+#######################################################################
+
+  1,2   Scanning documents does not scale, so precompute the
+        reverse map: term -> documents.
+  3     Decide what a term is, and decide it identically on both
+        the index side and the query side.
+  4     Store a sorted dictionary of terms, each pointing at a
+        posting list sorted by doc id.
+  5     Put tf and positions in the postings if ranking and phrase
+        queries need them.
+  6     Answer a query by intersecting sorted lists, rarest first.
+  7     Skip through long lists instead of walking them.
+  8     Use positions for phrases and proximity.
+  9     Score with BM25, which is exactly tf, df and length.
+  10    Compress the gaps, because sorted ids make small numbers.
+  11    Do not score everything - bound, threshold and skip.
+  12    Never update in place: immutable segments, tombstones,
+        background merges.
+  13    Keep the forward direction too, for sorting and features.
+  14    Fields make filters, and filters are cacheable bitmaps.
+  15    The sorted dictionary also gives prefix, wildcard and fuzzy.
+  16    Shard by document, replicate for traffic, cache at three
+        levels.
+  18    It still only matches words, so pair it with vectors.
+
+#######################################################################
+HOW THIS CONNECTS TO THE REST OF THE REPO
+#######################################################################
+
+  - This file is the deep version of PART 2 and PART 3 of
+    search/concept.txt. Read that first for where retrieval sits in
+    the funnel, this for what retrieval actually is.
+  - WAND and tiering (Part 11) are the funnel idea recursing inside
+    retrieval: cheap over many, expensive over few.
+  - Part 18 is the argument for hybrid retrieval that search/concept.txt
+    makes at the system level, stated here from the index's side.
+  - Segments, tombstones and merges (Part 12) are the same
+    log-structured trade as any write-optimised store, and the reason
+    "freshness" is an architecture question, not a config question.
+  - The retrieval/ranking asymmetry still rules everything: a document
+    missing from the index (Part 19) is lost permanently, and no
+    ranker can tell.

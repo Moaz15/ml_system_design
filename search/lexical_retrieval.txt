@@ -1,0 +1,287 @@
+LEXICAL RETRIEVAL - THE CONCEPT
+===============================
+Matching and scoring documents by the WORDS they share with the query.
+No training data, no embeddings, no GPU. Still the baseline that every
+fancier retriever has to beat. inverted_index is the data structure this runs on
+
+IF YOU REMEMBER ONLY FOUR THINGS
+
+  1. BM25 = term frequency, saturated + inverse document frequency +
+     length normalisation. Three ideas, one formula.
+
+  2. It is free, untrained, and genuinely hard to beat. If your neural
+     retriever does not clearly win over BM25, you do not have a
+     retriever, you have a liability.
+
+  3. It matches strings, not meaning. "cheap phone" vs "budget
+     smartphone" scores zero. That gap is the entire reason vectors
+     exist.
+
+  4. Most real-world lexical quality comes from the QUERY SIDE
+     (analysis, expansion, field boosts), not from tuning k1 and b.
+
+PART 1 - THE THREE INTUITIONS
+-------------------------------------
+  1. A term appearing often IN THIS DOCUMENT suggests the document is
+     about it.                                  -> term frequency, tf
+  2. A term appearing in NEARLY EVERY DOCUMENT tells you nothing.
+     "story" is weak, "mirzapur" is decisive.   -> inverse document
+                                                   frequency, idf
+  3. A long document contains more of every word by accident and must
+     not get credit for it.                     -> length
+                                                   normalisation
+
+Every lexical scorer ever shipped is some arrangement of these three.
+
+PART 2 - TF-IDF, AND WHY IT IS NOT ENOUGH
+----------------------------------------------
+    weight(t, d) = tf(t, d)  x  log(N / df(t))
+
+  N      number of documents
+  df(t)  how many documents contain t
+  tf     how many times t occurs in d
+
+Score a query by summing the weights of its terms, usually with cosine
+normalisation to handle document length.
+
+Two problems, both real:
+
+  LINEAR tf   50 occurrences of "crime" is not 50x more relevant than
+              one. Keyword-stuffed documents win.
+  CRUDE LENGTH cosine normalisation is a geometric accident, not a
+              model of why long documents differ.
+
+BM25 fixes exactly these two. Know TF-IDF as the ancestor; ship BM25.
+
+PART 3 - BM25, THE DEFAULT
+----------------------------------------------
+                                       tf x (k1 + 1)
+    score(q, d) = SUM   idf(t)  x  ------------------------------
+                  t in q           tf + k1 x (1 - b + b x dl/avgdl)
+
+    idf(t) = ln( 1 + (N - df + 0.5) / (df + 0.5) )
+
+  k1   ~1.2 to 2.0   how fast tf saturates. Lower = saturates sooner.
+  b    ~0.75         how hard long documents are penalised.
+                     b = 0 ignores length, b = 1 normalises fully.
+  dl   this document's length in terms; avgdl the collection average.
+
+READ THE FORMULA AS TWO KNOBS ON ONE RATIO:
+
+  SATURATION   as tf grows, the fraction approaches (k1 + 1) and stops.
+               The 2nd occurrence adds a lot, the 20th adds nothing.
+  LENGTH       dl/avgdl inflates the denominator for long documents, so
+               the same tf earns less in a long document than a short
+               one.
+
+The idf form above is the "probabilistic" one: it is near zero for a
+term in almost every document, and large for a rare term. Terms in more
+than half the collection can go slightly negative in the raw form,
+which is why implementations use the 1 + (...) version shown.
+
+
+#######################################################################
+PART 4 - WORKED EXAMPLE
+#######################################################################
+
+Same five-document catalog as search/inverted_index.txt:
+
+  D1 "Mirzapur crime thriller"        dl 3
+  D2 "Thriller night ghost story"     dl 4
+  D3 "Crime Patrol true crime stories" dl 5    (crime twice)
+  D4 "Mirzapur season two thriller"   dl 4
+  D5 "Ghost stories for kids"         dl 3
+
+  N = 5, avgdl = 3.8, k1 = 1.2, b = 0.75
+
+QUERY: "crime story"
+
+  idf(crime)  df 2  ->  ln(1 + 3.5/2.5)  = 0.875
+  idf(story)  df 3  ->  ln(1 + 2.5/3.5)  = 0.539
+
+  doc  length norm   crime     story    SCORE
+  ---------------------------------------------
+  D3   1.484         1.106  +  0.477  =  1.583
+  D1   1.011         0.958  +    -    =  0.958
+  D5   1.011           -    +  0.590  =  0.590
+  D2   1.247           -    +  0.528  =  0.528
+
+THREE THINGS TO READ OFF THIS TABLE
+
+  SATURATION   D3 has crime twice. At D3's own length, one occurrence
+               would be worth 0.775 and two are worth 1.106 - 1.4x for
+               2x the occurrences. Doubling tf never doubles the
+               score.
+
+  LENGTH       D5 and D2 both contain "story" exactly once and nothing
+               else. D5 wins (0.590 vs 0.528) purely because it is
+               shorter, so that one occurrence is a larger share of
+               what the document is about.
+
+  IDF          "crime" is worth 1.6x "story" per occurrence, because
+               fewer documents have it. D1 beats D5 and D2 on a single
+               term, having matched the rarer one.
+
+  AND NOTE: D4 scores nothing. It matches no query term at all, so it
+  never even enters scoring - the posting lists never produce it.
+
+PART 5 - FIELDS: BM25F
+#######################################################################
+
+A match in the TITLE means more than a match in a long description.
+The wrong fix is to score each field separately and add the scores -
+that saturates each field independently and lets a term stuffed into
+three fields win.
+
+BM25F instead combines the per-field frequencies FIRST, each with its
+own weight and its own length normalisation, then saturates once:
+
+    tf_combined(t, d) = SUM over fields f of
+                            weight(f) x tf(t, f) / length_norm(f)
+
+    then feed tf_combined into the usual BM25 saturation.
+
+Typical weights: title 3-5x, tags 2x, body 1x. These are tuned on
+judged queries, not guessed, and they move results far more than k1.
+
+
+#######################################################################
+PART 6 - HOW IT EXECUTES (ONE PARAGRAPH)
+#######################################################################
+
+Analyse the query with the same analyser used at index time. Look each
+term up in the dictionary to get its posting list and df. Walk the
+lists in doc-id order, accumulating per-document scores; keep a heap of
+the best k. Because idf and the per-term maximum contribution are known
+before you start, large regions of the long lists can be skipped
+entirely (WAND / block-max WAND). Cost is proportional to the length of
+the posting lists of the query's terms, not to the collection size.
+
+Full detail: search/inverted_index.txt, Parts 6, 7 and 11.
+
+
+#######################################################################
+PART 7 - THE QUERY SIDE, WHERE THE WINS ACTUALLY ARE
+#######################################################################
+
+Tuning k1 and b is worth a few percent. These are worth much more:
+
+  ANALYSER PARITY     the same tokenisation, lowercasing, stemming and
+                      unicode normalisation on both sides. The classic
+                      silent killer.
+  SPELL CORRECTION    "mirzapr" retrieves nothing. One edit away from
+                      everything.
+  SYNONYM EXPANSION   "audiobook" -> "audio book", "kahani" -> "story".
+                      Curated lists beat clever ones; expansion hurts
+                      precision, so weight expanded terms lower than
+                      the original.
+  MINIMUM-SHOULD-MATCH  pure AND returns nothing on long queries, pure
+                      OR returns garbage. "At least 70% of terms" is
+                      the practical middle.
+  PHRASE / PROXIMITY BOOST  score the OR query, then add a bonus when
+                      the terms appear adjacent or near each other.
+                      Cheap, and it fixes a lot of nonsense matches.
+  FIELD BOOSTS        see Part 5.
+  STOP WORDS          mostly unnecessary now - idf already discounts
+                      them, and removing them breaks "the who" and
+                      "to be or not to be".
+  PSEUDO-RELEVANCE FEEDBACK (RM3)  run the query, take terms from the
+                      top documents, re-run with those terms added.
+                      Helps recall, risks drift when the first pass was
+                      wrong. Rare in production latency budgets.
+
+
+#######################################################################
+PART 8 - WHERE IT IS STRONG AND WHERE IT BREAKS
+#######################################################################
+
+  STRONG ON    exact terms, names, rare words, product codes, IDs,
+               numbers, long-tail queries with no training data, new
+               documents on day one, anything the user typed literally
+  WEAK ON      synonyms, paraphrase, descriptive or vague intent,
+               cross-lingual and transliterated queries, multi-word
+               concepts, anything requiring world knowledge
+
+  THE DEFINING FAILURE - VOCABULARY MISMATCH
+    query: "cheap phone"    document: "budget smartphone"
+    Shared terms: none. Score: zero. And it fails at RETRIEVAL, so no
+    ranker downstream can rescue it. The document is simply gone.
+
+  THE MIRROR FAILURE, which is why lexical does not go away
+    query: "B07XJ8C8F5" or "mirzapur"
+    A vector model returns things that feel similar. BM25 returns the
+    one right answer.
+
+Lexical and semantic fail in opposite directions, so production runs
+both and fuses them (hybrid retrieval, usually reciprocal rank fusion).
+
+
+#######################################################################
+PART 9 - LEARNED SPARSE: THE MIDDLE GROUND
+#######################################################################
+
+You can keep the inverted index and still fix vocabulary mismatch, by
+learning the sparse weights instead of computing them.
+
+  DOC2QUERY / docTTTTTquery   generate likely queries for each document
+                              and append them to the document before
+                              indexing. "budget smartphone" now
+                              literally contains "cheap phone". Pure
+                              index-time cost, BM25 unchanged.
+  SPLADE                      a model outputs, for each document and
+                              query, a weight over the whole
+                              vocabulary - including terms not present
+                              in the text. Expansion and term weighting
+                              are learned, retrieval stays an inverted
+                              index lookup.
+
+Worth naming because it answers "why not just use vectors": you can
+often get much of the semantic gain while keeping exact match, cheap
+filtering, and an index that explains itself.
+
+
+#######################################################################
+PART 10 - EVALUATION AND FAILURE MODES
+#######################################################################
+
+  MEASURE RECALL, NOT NDCG, at this stage. Retrieval's job is to not
+  lose the answer; ordering is the ranker's job. recall@1000 is the
+  number that matters, and it caps everything downstream.
+
+  BM25 IS THE BASELINE in the same way seasonal naive is in
+  forecasting/: free, unbreakable, and the thing every proposal must
+  beat before it is allowed to cost money.
+
+  FAILURE MODES
+    ANALYSER SKEW       index and query analysed differently. Silent
+                        zero results.
+    ZERO RESULTS        no term matched. Needs a recall ladder: relax
+                        AND to min-should-match, spell-correct, drop
+                        the rarest term, fall back to semantic.
+    KEYWORD STUFFING    less effective against BM25 than TF-IDF, but
+                        field stuffing still works if you score fields
+                        separately instead of using BM25F.
+    SHORT DOCUMENTS WIN  b too high, so title-only documents outrank
+                        genuinely rich ones.
+    HEAD TERM DOMINATES  a long query where one common term is in
+                        every document; min-should-match and proximity
+                        boosts fix more of this than scoring tweaks.
+    IDF SKEW ACROSS SHARDS  df is computed per shard, so the same query
+                        can order differently on different replicas.
+
+
+#######################################################################
+THE FILE IN TEN LINES
+#######################################################################
+
+  tf, idf, length - that is all BM25 is.
+  Saturation stops repetition from winning.
+  Length normalisation stops long documents from winning.
+  Fields need BM25F, not separately scored and summed.
+  It runs as a walk over posting lists, skipping what cannot win.
+  The query side (parity, spelling, synonyms, min-should-match,
+    proximity) buys more than k1 and b ever will.
+  It is unbeatable on exact terms and helpless on paraphrase.
+  Learned sparse (doc2query, SPLADE) keeps the index and buys meaning.
+  Measure recall@k, not NDCG.
+  Always ship it as the baseline, even if you also ship vectors.

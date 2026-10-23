@@ -1,0 +1,235 @@
+CASE 01 - SYSTEM DESIGN, BOOTSTRAP AND FAILURE MODES
+====================================================
+Drawn only after 02_label.txt and 03_modelling.txt are settled. The
+shape is boring on purpose: the renewal date is known weeks in advance,
+so there is no real-time requirement anywhere in this system and
+nothing is gained by engineering for one.
+
+
+#######################################################################
+1. ARCHITECTURE
+#######################################################################
+
+                           OFFLINE (daily batch)
+
+  L0 SOURCES
+    billing ledger | app events | payment mandates | offer and
+    treatment log | catalog and content metadata
+                              |
+                              v
+  L1 INGEST AND STORE
+    ELT into the warehouse, daily partitions, cycle-level grain.
+    Unit of analysis = (user_id, cycle_id). Snapshot at T-7, label
+    observed at T+3.
+                              |
+                              v
+  L2 FEATURE LAYER
+    ONE transform codebase feeding both the offline point-in-time
+    table and the online store.
+    tenure | consumption | payment health | price-paid history |
+    past-offer exposure
+                              |
+          +-------------------+-------------------+
+          v                   v                   v
+    M1 PROPENSITY       M2 UPLIFT / CATE     M3 PRICE-RESPONSE
+    P(renew | x)        tau(x, arm)          tau(x, d) dose-
+    calibrated GBM      T-/X-learner or      response across
+    eligibility and     causal forest, on    depths, monotonicity
+    monitoring only     RANDOMISED rows      constrained
+          |                   |                   |
+          +-------------------+-------------------+
+                              v
+  L4 POLICY / OPTIMISER
+    value(x,d) = tau(x,d) * price * (1-d), net of cannibalisation
+                 on Sure Things
+    argmax over d, subject to SUM(discount cost) <= margin budget
+                 (Lagrangian, or greedy knapsack on gain/cost)
+    plus suppression: sleeping-dog guard, contact caps, fraud,
+                 recent-offer cooldown, active dunning
+    plus RANDOMISATION: global holdout percentage and an epsilon
+                 exploration arm
+                              |
+                              v
+                            ONLINE
+  L5 DECISION SERVICE
+    batch scores written to the online store. /decide returns
+    {treat?, arm, depth, expiry}. Idempotent per (user, cycle).
+    Every call logged, including the no-treat calls.
+                              |
+                              v
+  L6 DELIVERY
+    push | in-app paywall | SMS | retention price on the renewal
+    screen
+                              |
+                              v
+  L7 MEASUREMENT
+    always-on holdout -> Qini and AUUC, incremental revenue per
+    rupee of discount, guardrails on ARPU, margin, unsubscribe rate
+    and complaint rate
+                              |
+                              +--> back into L1: assignment and
+                                   outcome logs become the next
+                                   training set
+
+The loop at the bottom is the system. Exploration produces the data
+that the next model is identified from, which is why the epsilon arm
+and the holdout are permanent infrastructure rather than a launch
+phase.
+
+LATENCY AND RUNTIME BUDGET. The daily batch runs at 06:00 on data
+settled to 48 hours, and the whole pipeline has about four hours before
+the morning send window - roughly 45 minutes of scoring and 15 minutes
+of optimisation at 2.5M rows is comfortable. The /decide call is a
+lookup against a precomputed decision, so a p99 of 50ms is generous.
+Writing those numbers down matters less here than in a ranking system;
+saying WHY they do not matter is the point.
+
+
+#######################################################################
+2. COMPONENT CONTRACT
+#######################################################################
+
+  #   COMPONENT      IN              OUT             FAILS IF
+  -------------------------------------------------------------------
+  L1  Cycle table    raw events      (user, cycle)   any post-T-7
+                                     rows, snapshot  data leaks into
+                                     at T-7          the snapshot
+  L2  Feature layer  cycle table     offline +       train/serve skew,
+                                     online features or no point-in-
+                                                     time join
+  M1  Propensity     features        calibrated      it is used for
+                                     P(renew)        targeting rather
+                                                     than eligibility
+  M2  Uplift         randomised log  tau(x, arm)     it is trained on
+                                                     observational
+                                                     data and is
+                                                     therefore
+                                                     confounded
+  M3  Price-response multi-arm log   tau(x, d) curve depths were never
+                                                     randomised, so d
+                                                     is collinear with
+                                                     risk
+  L4  Policy         tau + budget    treat/arm/depth it ignores
+                                                     cannibalisation
+                                                     on Sure Things
+  L5  Serving        policy artefact decision + log  it is not
+                                                     idempotent, and
+                                                     users get double
+                                                     offers
+  L7  Measurement    holdout         incremental     there is no
+                                     revenue, Qini   holdout, so the
+                                                     uplift is
+                                                     unverifiable
+
+Read the right-hand column as the design. Each row is a specific way
+this project has been seen to fail, and the component exists to make
+that failure visible rather than to make it impossible.
+
+
+#######################################################################
+3. THE CHICKEN AND EGG, AND HOW TO PAY FOR IT
+#######################################################################
+
+M2 and M3 need randomised treat/control data. On day one, none exists -
+every historical discount came from the risk rule, so depth and risk
+are the same variable and nothing causal is identified from three years
+of history.
+
+PHASE 0 - EXPLORE (weeks 1 to 8)
+  M1 for eligibility only. On a budgeted slice of the population,
+  assign depth at random from the grid, including a true zero-offer
+  control. This phase is PURE COST. It buys identification and nothing
+  else, and saying that plainly - rather than dressing it up as a
+  model-building phase - is what gets it approved honestly.
+  Ship alongside it: the dunning and mandate-repair work from
+  02_label.txt section 7, which needs no model and pays for part of
+  the exploration budget.
+
+PHASE 1 - LEARN (weeks 9 to 14)
+  Fit M2 and M3 on the Phase-0 logs. Validate by Qini on a held-out
+  slice of those logs, never on rows the model was fit on. Expect the
+  first Qini curve to be disappointing and say so in advance; a flat
+  curve at this stage means the sample is thin, not that uplift does
+  not exist.
+
+PHASE 2 - EXPLOIT (week 15 onward)
+  The optimiser targets Persuadables under the budget. Retain the
+  global holdout and the epsilon arm FOREVER, so the next model stays
+  identified and the channel stays measurable.
+
+NON-NEGOTIABLE: the randomisation is the data asset, not the model. The
+model can be refit in an afternoon. A quarter of randomised assignment
+logs cannot be recovered after the fact at any price.
+
+WHAT GETS SHIPPED WHEN, COMPRESSED
+
+  WEEK 1-2    cycle table, point-in-time feature layer, logging. No
+              model. Separate involuntary from voluntary churn and
+              hand the involuntary slice to payments
+  WEEK 3-4    M1 calibrated, running in shadow. Randomiser live on a
+              small slice
+  WEEK 5-8    exploration accumulates. The only thing reported is
+              assignment balance and delivery rate
+  WEEK 9-14   M2 and M3 fit; Qini on held-out logs; the three-policy
+              comparison from 05_measurement.txt section 4 run
+              offline against logged assignments
+  WEEK 15     policy live at a small share against the incumbent rule
+              plus a holdout, ramped on the incremental-revenue
+              metric and nothing else
+  MONTH 6     depth grid revisited, arm types beyond price
+              considered, per-segment Qini monitored
+
+DELIBERATELY NOT IN SCOPE: real-time scoring, coin unlocks and episode
+paywalls, a continuous depth optimiser, and any per-user LTV model. The
+last one is worth naming out loud because it is the thing people ask
+for next, and it does not change a single decision this system makes.
+
+
+#######################################################################
+4. FAILURE MODES AND MONITORING
+#######################################################################
+
+THE SELF-DEFEATING PROPHECY. A good model plus a good intervention
+destroys its own accuracy: the people predicted to lapse are treated,
+they renew, and the churn model now looks wrong. If anyone is tracking
+M1's AUC as the success metric, a working system reads as a degrading
+one. This is the single strongest reason the success metric lives in
+L7 and is measured against a holdout. Monitor M1 on the HOLDOUT, where
+the prophecy is not self-defeating because nothing was done.
+
+DISCOUNT ANCHORING. Treating someone this cycle changes their reference
+price for the next one. The effect is a cost that lands outside the
+cycle being optimised, so a myopic per-cycle optimiser will
+systematically over-treat. Watch renewal rate at FULL price among users
+treated in prior cycles, against the holdout, and if the gap grows the
+grid is too deep or the cooldown is too short.
+
+OFFER FATIGUE. More contact, less response, and eventually a disabled
+notification channel or an uninstall - a permanent loss driven by a
+short-term metric. There is no direct fatigue label, so it is enforced
+as a constraint (contact caps, cooldown windows) and monitored through
+channel-level opt-out rate rather than modelled.
+
+CONFOUNDED REFIT. The most likely way this system dies quietly: six
+months in, someone refits M2 on all available data rather than on
+randomised rows only, because there is so much more of it. Depth is
+collinear with risk in those rows, the model learns that discounts
+cause churn, and the policy inverts. The defence is mechanical, not
+cultural: M2's training job reads from a view that contains only
+randomised assignments.
+
+DRIFT. Monitor input distributions, not just outcomes, because labels
+arrive three to ten days late and a drifted population is visible
+immediately. Watch the share of autopay users, the tenure mix, and the
+distribution of minutes_30d.
+
+ASSIGNMENT IMBALANCE. Check the randomiser daily against its intended
+split. A silently broken randomiser produces a dataset that looks fine
+and is worth nothing, and it is usually found months later.
+
+FALLBACK WHEN THE MODEL IS DOWN. Serve no offer. Not the old rule - no
+offer. A missed save offer costs one cycle of one user's margin; a
+stale or duplicated offer costs money, trains a user to wait for
+discounts, and corrupts the assignment log. Silence is the safe
+default here, and it is a defensible answer precisely because it is the
+cheap direction of error.
